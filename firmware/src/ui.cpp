@@ -217,6 +217,18 @@ static lv_obj_t* lbl_spending_desc = nullptr;     // "of your monthly budget"
 static lv_obj_t* lbl_spending_status = nullptr;   // "Under pace" / "On pace" / "Over pace"
 static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idle
 
+// ---- Timer screen: countdown to the session reset ----
+static lv_obj_t* timer_container = nullptr;
+static lv_obj_t* arc_timer   = nullptr;  // ring filled with session utilisation
+static lv_obj_t* lbl_timer_big = nullptr;  // "1:15"
+static lv_obj_t* lbl_timer_cap = nullptr;  // "until reset"
+static lv_obj_t* lbl_timer_pct = nullptr;  // "78% used"
+static int      timer_reset_mins = -1;   // minutes-to-reset from the last payload
+static uint32_t timer_base_ms    = 0;    // lv_tick when that value landed
+static int      timer_pct        = 0;    // session utilisation from the last payload
+static int      timer_last_drawn = -2;   // last minute rendered; skips redundant redraws
+static int      timer_last_state = -1;   // last link state rendered (0 down / 1 stale / 2 live)
+
 // ---- Battery indicator (shared, on top) ----
 static lv_obj_t* battery_img;
 static lv_obj_t* logo_img;
@@ -309,6 +321,16 @@ static void format_reset_time(int mins, char* buf, size_t len) {
     } else {
         snprintf(buf, len, "Resets in %dd %dh", mins / 1440, (mins % 1440) / 60);
     }
+}
+
+// Countdown figure for the timer screen. Deliberately terser than
+// format_reset_time(): this one is set in the 56px title face, so it drops the
+// "Resets in" prefix and reads as a clock — "45m", "1:15", "2d 3h".
+static void format_timer_big(int mins, char* buf, size_t len) {
+    if (mins < 0)         snprintf(buf, len, "--");
+    else if (mins < 60)   snprintf(buf, len, "%dm", mins);
+    else if (mins < 1440) snprintf(buf, len, "%d:%02d", mins / 60, mins % 60);
+    else                  snprintf(buf, len, "%dd %dh", mins / 1440, (mins % 1440) / 60);
 }
 
 // Forward decls — callbacks defined near ui_show_screen below
@@ -540,6 +562,63 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, L.anim_y);
 }
 
+// Countdown view: how long until the limit resets, sized to be read from
+// across the desk, with a ring that fills as the window is consumed — so the
+// screen answers "how long" and "how much" in one look. Same numbers as the
+// Usage screen, no new payload fields. Enterprise accounts have no 5h window;
+// there session_reset_mins carries the spending-limit reset, so the countdown
+// stays meaningful without a special case.
+static void init_timer_screen(lv_obj_t* scr) {
+    timer_container = lv_obj_create(scr);
+    lv_obj_set_size(timer_container, L.scr_w, L.scr_h);
+    lv_obj_set_pos(timer_container, 0, 0);
+    lv_obj_set_style_bg_opa(timer_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(timer_container, 0, 0);
+    lv_obj_set_style_pad_all(timer_container, 0, 0);
+    lv_obj_clear_flag(timer_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(timer_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(timer_container, LV_OBJ_FLAG_HIDDEN);
+
+    // 5/8 of the screen width keeps the ring clear of the corner mascot and the
+    // battery icon, both of which sit on the root screen above every view.
+    const int d = L.scr_w * 5 / 8;
+    const int arc_w = L.bar_h * 3 / 4;
+
+    arc_timer = lv_arc_create(timer_container);
+    lv_obj_set_size(arc_timer, d, d);
+    lv_obj_center(arc_timer);
+    lv_arc_set_rotation(arc_timer, 135);
+    lv_arc_set_bg_angles(arc_timer, 0, 270);
+    lv_arc_set_range(arc_timer, 0, 100);
+    lv_arc_set_value(arc_timer, 0);
+    lv_obj_remove_style(arc_timer, NULL, LV_PART_KNOB);   // no drag handle
+    lv_obj_clear_flag(arc_timer, LV_OBJ_FLAG_CLICKABLE);  // taps belong to the container
+    lv_obj_set_style_bg_opa(arc_timer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(arc_timer, 0, 0);
+    lv_obj_set_style_arc_width(arc_timer, arc_w, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc_timer, COL_BAR_BG, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc_timer, arc_w, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc_timer, COL_GREEN, LV_PART_INDICATOR);
+
+    lbl_timer_big = lv_label_create(timer_container);
+    lv_label_set_text(lbl_timer_big, "--");
+    lv_obj_set_style_text_font(lbl_timer_big, L.title_font, 0);
+    lv_obj_set_style_text_color(lbl_timer_big, COL_TEXT, 0);
+    lv_obj_align(lbl_timer_big, LV_ALIGN_CENTER, 0, -18);
+
+    lbl_timer_cap = lv_label_create(timer_container);
+    lv_label_set_text(lbl_timer_cap, "until reset");
+    lv_obj_set_style_text_font(lbl_timer_cap, L.pace_font, 0);
+    lv_obj_set_style_text_color(lbl_timer_cap, COL_DIM, 0);
+    lv_obj_align(lbl_timer_cap, LV_ALIGN_CENTER, 0, 26);
+
+    lbl_timer_pct = lv_label_create(timer_container);
+    lv_label_set_text(lbl_timer_pct, "");
+    lv_obj_set_style_text_font(lbl_timer_pct, L.reset_font, 0);
+    lv_obj_set_style_text_color(lbl_timer_pct, COL_DIM, 0);
+    lv_obj_align(lbl_timer_pct, LV_ALIGN_CENTER, 0, d / 2 + 28);
+}
+
 // ======== Public API ========
 
 void ui_init(void) {
@@ -557,6 +636,7 @@ void ui_init(void) {
     init_battery_icons();
 
     init_usage_screen(scr);
+    init_timer_screen(scr);
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -673,6 +753,14 @@ void ui_update(const UsageData* data) {
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     }
+
+    // ---- Timer screen: stash the numbers; timer_tick() does the drawing ----
+    // Keeping every write in one place means the countdown can advance between
+    // payloads without ui_update() and the tick fighting over the same labels.
+    timer_reset_mins = data->session_reset_mins;
+    timer_base_ms    = last_data_ms;
+    timer_pct        = s_pct;
+    timer_last_drawn = -2;   // force the next tick to repaint
 }
 
 // Pick the usage-view sub-screen: pairing hint (BLE down), the idle "Zzz" screen
@@ -698,7 +786,53 @@ static void update_view_state(void) {
                       LV_OBJ_FLAG_HIDDEN);
 }
 
+// Countdown upkeep, run every loop while the timer view is up.
+//
+// Two jobs. First, advance the figure locally: the daemon only sends every
+// ~60s, so a countdown driven purely by payloads sits still and then jumps a
+// whole minute. Same approach as the title clock. Resolution stays at minutes
+// on purpose — the payload carries whole minutes, so a seconds display would
+// invent precision the data doesn't have.
+//
+// Second, say why the screen is empty. A bare "--" reads as broken; the usage
+// view already distinguishes "no link" from "linked but no fresh data", and
+// this view now spells out the same two cases, including the remedy for the
+// first one.
+static void timer_tick(void) {
+    if (!arc_timer) return;
+    update_view_state();
+
+    const int state = !s_ble_connected ? 0 : (view_state == 2 ? 2 : 1);
+
+    int mins = -1;
+    if (state == 2 && timer_reset_mins >= 0) {
+        uint32_t elapsed_min = (lv_tick_get() - timer_base_ms) / 60000UL;
+        mins = timer_reset_mins - (int)elapsed_min;
+        if (mins < 0) mins = 0;
+    }
+
+    if (state == timer_last_state && mins == timer_last_drawn) return;
+    timer_last_state = state;
+    timer_last_drawn = mins;
+
+    char buf[48];
+    if (state == 2) {
+        format_timer_big(mins, buf, sizeof(buf));
+        lv_label_set_text(lbl_timer_big, buf);
+        lv_label_set_text(lbl_timer_cap, "until reset");
+        lv_label_set_text_fmt(lbl_timer_pct, "%d%% used", timer_pct);
+        lv_arc_set_value(arc_timer, timer_pct);
+        lv_obj_set_style_arc_color(arc_timer, pct_color((float)timer_pct), LV_PART_INDICATOR);
+    } else {
+        lv_label_set_text(lbl_timer_big, "--");
+        lv_label_set_text(lbl_timer_cap, state == 0 ? "not connected" : "waiting for data");
+        lv_label_set_text(lbl_timer_pct, state == 0 ? "hold PWR 3s to pair" : "");
+        lv_arc_set_value(arc_timer, 0);
+    }
+}
+
 void ui_tick_anim(void) {
+    if (current_screen == SCREEN_TIMER) { timer_tick(); return; }
     if (current_screen != SCREEN_USAGE) return;
     update_view_state();
     if (view_state == 1) splash_mini_tick();   // animate the sleeping creature on the idle screen
@@ -765,17 +899,20 @@ static void apply_battery_visibility(void) {
 
 static void global_click_cb(lv_event_t* e) {
     (void)e;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    // Tap cycles splash -> usage -> timer -> splash. Every view is built once
+    // at boot and toggled with a flag, so switching costs nothing.
+    ui_show_screen((screen_t)((current_screen + 1) % SCREEN_COUNT));
 }
 
 void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+    if (timer_container) lv_obj_add_flag(timer_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
     case SCREEN_SPLASH:  splash_show(); break;
     case SCREEN_USAGE:   lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_TIMER:   if (timer_container) lv_obj_clear_flag(timer_container, LV_OBJ_FLAG_HIDDEN); break;
     default: break;
     }
 
