@@ -17,3 +17,33 @@ struct UsageData {
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };
+
+// ---- Agenda (calendar events + reminders from the companion daemon) ----
+//
+// The mac does all the shaping: it expands recurrences, sorts, truncates
+// titles to what a row can show, and picks which handful is worth sending.
+// The board only counts time, so "in 12 min" stays right between polls.
+
+#define AGENDA_MAX_ITEMS   4
+#define AGENDA_TITLE_LEN   40   // ~24 glyphs, with headroom for multi-byte UTF-8
+#define AGENDA_HANDLE_LEN  9    // opaque token; the daemon maps it back to EventKit
+
+struct AgendaItem {
+    long start_epoch;    // local wall-clock epoch (s), same basis as UsageData::clock_epoch
+    long alarm_epoch;    // when to ring; 0 = never
+    int  duration_min;   // 0 = a reminder, which has no span
+    char title[AGENDA_TITLE_LEN];
+    char handle[AGENDA_HANDLE_LEN];
+    unsigned char color; // 0 = accent, 1 = green, 2 = dim — the calendar's colour
+    bool is_reminder;    // square marker instead of a round one
+};
+
+struct AgendaData {
+    AgendaItem items[AGENDA_MAX_ITEMS];
+    int  count;
+    int  more;           // how many further items didn't fit — "+N later"
+    long clock_epoch;    // the daemon's wall clock when this was sent
+    char date[16];       // formatted by the daemon, e.g. "Mon 8 Sep"
+    bool quiet;          // inside the daemon's quiet hours — show, don't ring
+    bool valid;          // false until the first payload parses
+};

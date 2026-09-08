@@ -11,8 +11,14 @@
 #define RX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000002"  // host writes here
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
+#define CMP_CHAR_UUID       "4c41555a-4465-7669-6365-000000000005"  // companion: agenda in, actions out
 
 #define BLE_BUF_SIZE 512
+
+// The companion channel carries a whole agenda — several titles and
+// timestamps — which outgrows what one ATT write can hold, so its payloads
+// arrive as framed fragments (see CmpCallbacks) and are reassembled here.
+#define CMP_BUF_SIZE 1024
 
 // HID keyboard report descriptor (standard 6-KRO boot-protocol-compatible).
 // Includes the LED output report (Num/Caps/Scroll Lock indicators) — without
@@ -61,6 +67,7 @@ static NimBLECharacteristic* input_kbd = nullptr;
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
+static NimBLECharacteristic* cmp_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -73,6 +80,10 @@ static volatile uint16_t param_fix_handle = CONN_HANDLE_NONE;  // pending retry
 static volatile uint32_t param_fix_at_ms  = 0;                 // when to send it
 static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connection
 static char rx_buf[BLE_BUF_SIZE];
+static char cmp_buf[CMP_BUF_SIZE];
+static size_t cmp_len = 0;         // bytes assembled so far
+static uint8_t cmp_next_frag = 0;  // fragment index the reassembler expects
+static bool cmp_ready = false;
 static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
 static char mac_str[18];
@@ -286,6 +297,63 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+// Companion payloads (agenda) arrive as fragments: one leading byte carries
+// the fragment index, the next the total count, and the rest is a slice of the
+// JSON. One fragment is the common case (index 0, total 1) and costs two bytes;
+// anything longer than a single ATT write splits without the format changing.
+// Out-of-order or interrupted sequences are dropped whole rather than parsed
+// half-assembled — a restarted daemon just sends the next payload from zero.
+class CmpCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
+        if (!info.isEncrypted()) {
+            Serial.println("BLE: dropping companion write from unencrypted link");
+            return;
+        }
+        std::string id = info.getIdAddress().toString();
+        if (owner_set && strcmp(id.c_str(), owner_addr) != 0) {
+            Serial.printf("BLE: dropping companion write from non-owner %s\n", id.c_str());
+            return;
+        }
+
+        std::string val = chr->getValue();
+        if (val.length() < 3) {
+            Serial.println("BLE: companion frame too short");
+            return;
+        }
+        const uint8_t idx   = (uint8_t)val[0];
+        const uint8_t total = (uint8_t)val[1];
+        const char*   body  = val.c_str() + 2;
+        const size_t  body_len = val.length() - 2;
+
+        if (total == 0 || idx >= total) {
+            Serial.printf("BLE: bad companion frame %u/%u\n", idx, total);
+            cmp_len = 0; cmp_next_frag = 0;
+            return;
+        }
+        if (idx == 0) { cmp_len = 0; cmp_next_frag = 0; }
+        else if (idx != cmp_next_frag) {
+            Serial.printf("BLE: companion frame %u out of order (wanted %u)\n", idx, cmp_next_frag);
+            cmp_len = 0; cmp_next_frag = 0;
+            return;
+        }
+        if (cmp_len + body_len >= CMP_BUF_SIZE) {
+            Serial.println("BLE: companion payload overruns the buffer");
+            cmp_len = 0; cmp_next_frag = 0;
+            return;
+        }
+
+        memcpy(cmp_buf + cmp_len, body, body_len);
+        cmp_len += body_len;
+        cmp_buf[cmp_len] = '\0';
+        cmp_next_frag = idx + 1;
+
+        if (cmp_next_frag == total) {
+            cmp_ready = true;
+            cmp_next_frag = 0;
+        }
+    }
+};
+
 // When the daemon enables notifications on the refresh char, ask for data
 // if we have none yet. Firing on subscribe (not on connect) ensures the
 // notification isn't dropped before the daemon's CCCD write completes.
@@ -357,6 +425,16 @@ void ble_init(void) {
     );
     static ReqCallbacks reqCb;
     req_char->setCallbacks(&reqCb);
+
+    // One characteristic for the whole companion protocol: the daemon writes
+    // the agenda in, the board notifies "done"/"snooze" back out. Keeping both
+    // directions here leaves the usage channel above untouched.
+    cmp_char = svc->createCharacteristic(
+        CMP_CHAR_UUID,
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
+    );
+    static CmpCallbacks cmpCb;
+    cmp_char->setCallbacks(&cmpCb);
 
     svc->start();
     server->start();
@@ -430,6 +508,21 @@ void ble_send_nack(void) {
         tx_char->setValue("{\"err\":true}");
         tx_char->notify();
     }
+}
+
+bool ble_has_companion(void) {
+    return cmp_ready;
+}
+
+const char* ble_get_companion(void) {
+    cmp_ready = false;
+    return cmp_buf;
+}
+
+void ble_companion_notify(const char* json) {
+    if (state != BLE_STATE_CONNECTED || !cmp_char) return;
+    cmp_char->setValue((const uint8_t*)json, strlen(json));
+    cmp_char->notify();
 }
 
 void ble_set_battery_level(int pct) {

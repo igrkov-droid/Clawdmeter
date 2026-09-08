@@ -57,6 +57,20 @@ struct Layout {
     int16_t pair_y1, pair_y2, pair_y3;
     int16_t idle_px;                 // sleeping-creature size on the idle screen
 
+    // Agenda screen
+    int16_t ag_hero_y, ag_hero_h;
+    int16_t ag_row_y, ag_row_h;
+    int16_t ag_foot_y;
+    uint8_t ag_rows;                 // list rows below the hero card that fit
+    const lv_font_t* ag_kicker_font; // "IN 12 MIN" over the hero card
+    const lv_font_t* ag_title_font;  // hero event title
+    const lv_font_t* ag_meta_font;   // hero time range
+    const lv_font_t* ag_row_font;    // list row title
+    const lv_font_t* ag_time_font;   // list row time, tabular
+    const lv_font_t* ag_foot_font;   // "+2 later"
+    const lv_font_t* ag_alarm_font;  // ringing reminder title
+    const lv_font_t* ag_btn_font;    // Snooze / Done
+
     // Bluetooth screen
     int16_t bt_info_panel_h;
     int16_t bt_reset_zone_h;
@@ -110,6 +124,20 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 16;
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
+        L.ag_hero_y = 64;
+        L.ag_hero_h = 168;
+        L.ag_row_y = 252;
+        L.ag_row_h = 52;
+        L.ag_foot_y = 424;
+        L.ag_rows = 3;
+        L.ag_kicker_font = &font_styrene_16;
+        L.ag_title_font  = &font_tiempos_34;
+        L.ag_meta_font   = &font_styrene_20;
+        L.ag_row_font    = &font_styrene_20;
+        L.ag_time_font   = &font_mono_18;
+        L.ag_foot_font   = &font_styrene_14;
+        L.ag_alarm_font  = &font_tiempos_56;
+        L.ag_btn_font    = &font_styrene_24;
         L.bt_info_panel_h = 160;
         L.bt_reset_zone_h = 110;
         L.bt_title_font    = &font_tiempos_56;
@@ -124,6 +152,20 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 12;
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;
+        L.ag_hero_y = 58;
+        L.ag_hero_h = 150;
+        L.ag_row_y = 224;
+        L.ag_row_h = 46;
+        L.ag_foot_y = 400;
+        L.ag_rows = 3;
+        L.ag_kicker_font = &font_styrene_14;
+        L.ag_title_font  = &font_tiempos_34;
+        L.ag_meta_font   = &font_styrene_16;
+        L.ag_row_font    = &font_styrene_16;
+        L.ag_time_font   = &font_mono_18;
+        L.ag_foot_font   = &font_styrene_12;
+        L.ag_alarm_font  = &font_tiempos_34;
+        L.ag_btn_font    = &font_styrene_20;
         L.bt_info_panel_h = 140;
         L.bt_reset_zone_h = 90;
         L.bt_title_font    = &font_tiempos_34;
@@ -166,6 +208,20 @@ static void compute_layout(const BoardCaps& c) {
         L.pair_y2 = 56;
         L.pair_y3 = 80;
         L.idle_px = 96;
+        L.ag_hero_y = 30;
+        L.ag_hero_h = 92;
+        L.ag_row_y = 128;
+        L.ag_row_h = 34;
+        L.ag_foot_y = 208;
+        L.ag_rows = 2;
+        L.ag_kicker_font = &font_styrene_12;
+        L.ag_title_font  = &font_styrene_20;
+        L.ag_meta_font   = &font_styrene_14;
+        L.ag_row_font    = &font_styrene_14;
+        L.ag_time_font   = &font_mono_18;
+        L.ag_foot_font   = &font_styrene_12;
+        L.ag_alarm_font  = &font_tiempos_34;
+        L.ag_btn_font    = &font_styrene_16;
         L.bt_info_panel_h = 90;
         L.bt_reset_zone_h = 60;
         L.bt_title_font    = &font_tiempos_34;
@@ -540,6 +596,272 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, L.anim_y);
 }
 
+// ======== Agenda Screen ========
+//
+// The daemon sends absolute timestamps and pre-truncated titles; everything
+// here is presentation plus the one thing the board must own — counting down.
+// "in 12 min" is recomputed from the shared wall clock every second, so it
+// stays right between polls and while the link is down.
+
+static lv_obj_t* agenda_container = nullptr;
+static lv_obj_t* ag_date = nullptr;
+static lv_obj_t* ag_hero = nullptr;
+static lv_obj_t* ag_stripe = nullptr;
+static lv_obj_t* ag_kicker = nullptr;
+static lv_obj_t* ag_title = nullptr;
+static lv_obj_t* ag_meta = nullptr;
+static lv_obj_t* ag_progress = nullptr;
+static lv_obj_t* ag_foot = nullptr;
+static lv_obj_t* ag_empty_group = nullptr;
+static lv_obj_t* ag_empty_title = nullptr;
+static lv_obj_t* ag_empty_sub = nullptr;
+
+struct AgendaRow {
+    lv_obj_t* group;
+    lv_obj_t* rule;
+    lv_obj_t* time;
+    lv_obj_t* dot;
+    lv_obj_t* name;
+};
+static AgendaRow agenda_rows[AGENDA_MAX_ITEMS - 1];
+
+static AgendaData agenda;            // last payload, kept for the per-second tick
+static int  ag_last_kicker_sec = -1; // so the tick only relays out on a change
+
+// Alarm screen
+static lv_obj_t* alarm_container = nullptr;
+static lv_obj_t* al_kicker = nullptr;
+static lv_obj_t* al_title = nullptr;
+static lv_obj_t* al_time = nullptr;
+static lv_obj_t* al_btn_snooze = nullptr;
+static lv_obj_t* al_btn_done = nullptr;
+static AgendaItem alarm_item;
+static bool alarm_item_valid = false;
+static ui_alarm_action_cb alarm_cb = nullptr;
+
+static lv_color_t agenda_color(unsigned char c) {
+    switch (c) {
+    case 1:  return COL_GREEN;
+    case 2:  return COL_DIM;
+    default: return COL_ACCENT;
+    }
+}
+
+// The daemon ships an already-local-shifted epoch (time + gmtoff), so clock
+// arithmetic is plain division — no timezone database on the board.
+static void format_clock_time(long epoch, char* buf, size_t len) {
+    long secs_today = epoch % 86400L;
+    if (secs_today < 0) secs_today += 86400L;
+    int h = (int)(secs_today / 3600);
+    int m = (int)((secs_today / 60) % 60);
+    if (clock_fmt == 12) {
+        int h12 = h % 12; if (h12 == 0) h12 = 12;
+        snprintf(buf, len, "%d:%02d", h12, m);
+    } else {
+        snprintf(buf, len, "%02d:%02d", h, m);
+    }
+}
+
+// "in 12 min" / "in 2 h 15" / "now". Anything past today's horizon is the
+// daemon's problem — it only sends what's worth counting down to.
+static void format_lead_time(long secs, char* buf, size_t len) {
+    if (secs <= 0) { snprintf(buf, len, "STARTING NOW"); return; }
+    long mins = (secs + 59) / 60;
+    if (mins < 60)      snprintf(buf, len, "IN %ld MIN", mins);
+    else if (mins < 600) snprintf(buf, len, "IN %ld H %02ld", mins / 60, mins % 60);
+    else                 snprintf(buf, len, "IN %ld H", mins / 60);
+}
+
+static lv_obj_t* make_agenda_label(lv_obj_t* parent, const lv_font_t* font,
+                                   lv_color_t color, int x, int y) {
+    lv_obj_t* lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, "");
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_obj_set_style_text_color(lbl, color, 0);
+    lv_obj_set_pos(lbl, x, y);
+    return lbl;
+}
+
+static void init_agenda_screen(lv_obj_t* scr) {
+    agenda_container = lv_obj_create(scr);
+    lv_obj_set_size(agenda_container, L.scr_w, L.scr_h);
+    lv_obj_set_pos(agenda_container, 0, 0);
+    lv_obj_set_style_bg_opa(agenda_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(agenda_container, 0, 0);
+    lv_obj_set_style_pad_all(agenda_container, 0, 0);
+    lv_obj_clear_flag(agenda_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(agenda_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(agenda_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+
+    ag_date = make_agenda_label(agenda_container, L.ag_foot_font, COL_DIM,
+                                L.margin, L.title_y / 2);
+
+    // Hero card — the one thing readable from across the desk.
+    ag_hero = make_panel(agenda_container, L.margin, L.ag_hero_y,
+                         L.content_w, L.ag_hero_h);
+
+    ag_stripe = lv_obj_create(ag_hero);
+    lv_obj_set_size(ag_stripe, 5, L.ag_hero_h);
+    lv_obj_set_pos(ag_stripe, -L.panel_pad_x, -L.panel_pad_y);
+    lv_obj_set_style_bg_color(ag_stripe, COL_ACCENT, 0);
+    lv_obj_set_style_bg_opa(ag_stripe, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ag_stripe, 0, 0);
+    lv_obj_set_style_radius(ag_stripe, 0, 0);
+    lv_obj_clear_flag(ag_stripe, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ag_stripe, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    const int hero_inner_w = L.content_w - 2 * L.panel_pad_x;
+    ag_kicker = make_agenda_label(ag_hero, L.ag_kicker_font, COL_ACCENT, 8, 4);
+    ag_title  = make_agenda_label(ag_hero, L.ag_title_font, COL_TEXT, 8, L.ag_hero_h / 4);
+    lv_label_set_long_mode(ag_title, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(ag_title, hero_inner_w - 8);
+    ag_meta   = make_agenda_label(ag_hero, L.ag_meta_font, COL_DIM, 8, L.ag_hero_h * 5 / 8);
+
+    ag_progress = make_bar(ag_hero, 8, L.ag_hero_h - 2 * L.panel_pad_y - 8,
+                           hero_inner_w - 8, 6);
+    lv_obj_set_style_bg_color(ag_progress, COL_GREEN, LV_PART_INDICATOR);
+    lv_obj_add_flag(ag_progress, LV_OBJ_FLAG_HIDDEN);
+
+    // List rows. A row is a transparent strip so the whole set can be hidden
+    // together when fewer items arrive than there are slots.
+    for (int i = 0; i < AGENDA_MAX_ITEMS - 1; i++) {
+        AgendaRow& r = agenda_rows[i];
+        const int y = L.ag_row_y + i * L.ag_row_h;
+
+        r.rule = lv_obj_create(agenda_container);
+        lv_obj_set_size(r.rule, L.content_w, 1);
+        lv_obj_set_pos(r.rule, L.margin, y);
+        lv_obj_set_style_bg_color(r.rule, COL_BAR_BG, 0);
+        lv_obj_set_style_bg_opa(r.rule, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(r.rule, 0, 0);
+        lv_obj_set_style_radius(r.rule, 0, 0);
+        lv_obj_add_flag(r.rule, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        r.group = lv_obj_create(agenda_container);
+        lv_obj_set_size(r.group, L.content_w, L.ag_row_h);
+        lv_obj_set_pos(r.group, L.margin, y);
+        lv_obj_set_style_bg_opa(r.group, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(r.group, 0, 0);
+        lv_obj_set_style_pad_all(r.group, 0, 0);
+        lv_obj_clear_flag(r.group, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(r.group, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        const int text_y = (L.ag_row_h - 22) / 2;
+        r.time = make_agenda_label(r.group, L.ag_time_font, COL_DIM, 0, text_y + 2);
+
+        r.dot = lv_obj_create(r.group);
+        lv_obj_set_size(r.dot, 9, 9);
+        lv_obj_set_pos(r.dot, L.content_w / 6, L.ag_row_h / 2 - 4);
+        lv_obj_set_style_border_width(r.dot, 0, 0);
+        lv_obj_set_style_bg_opa(r.dot, LV_OPA_COVER, 0);
+        lv_obj_add_flag(r.dot, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        r.name = make_agenda_label(r.group, L.ag_row_font, COL_TEXT,
+                                   L.content_w / 6 + 26, text_y);
+        lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(r.name, L.content_w - (L.content_w / 6 + 26));
+    }
+
+    ag_foot = make_agenda_label(agenda_container, L.ag_foot_font, COL_DIM,
+                                L.margin, L.ag_foot_y);
+
+    // An empty day is a normal evening state, so it gets a composition of its
+    // own rather than a blank panel.
+    ag_empty_group = lv_obj_create(agenda_container);
+    lv_obj_set_size(ag_empty_group, L.scr_w, L.scr_h);
+    lv_obj_set_pos(ag_empty_group, 0, 0);
+    lv_obj_set_style_bg_opa(ag_empty_group, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ag_empty_group, 0, 0);
+    lv_obj_clear_flag(ag_empty_group, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ag_empty_group, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    ag_empty_title = lv_label_create(ag_empty_group);
+    lv_label_set_text(ag_empty_title, "Nothing left today");
+    lv_obj_set_style_text_font(ag_empty_title, L.ag_title_font, 0);
+    lv_obj_set_style_text_color(ag_empty_title, COL_TEXT, 0);
+    lv_obj_align(ag_empty_title, LV_ALIGN_TOP_MID, 0, L.ag_hero_y + 24);
+
+    ag_empty_sub = lv_label_create(ag_empty_group);
+    lv_label_set_text(ag_empty_sub, "");
+    lv_obj_set_style_text_font(ag_empty_sub, L.ag_meta_font, 0);
+    lv_obj_set_style_text_color(ag_empty_sub, COL_DIM, 0);
+    lv_obj_align(ag_empty_sub, LV_ALIGN_TOP_MID, 0, L.ag_hero_y + 78);
+
+    lv_obj_add_flag(ag_empty_group, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ======== Alarm Screen ========
+
+static void alarm_btn_cb(lv_event_t* e) {
+    const bool done = ((lv_obj_t*)lv_event_get_target(e) == al_btn_done);
+    if (alarm_cb && alarm_item_valid) alarm_cb(alarm_item.handle, done);
+    alarm_item_valid = false;
+    ui_show_screen(SCREEN_AGENDA);
+}
+
+static lv_obj_t* make_alarm_button(lv_obj_t* parent, int x, const char* text,
+                                   lv_color_t bg, lv_color_t fg) {
+    const int w = (L.content_w - L.margin) / 2;
+    const int h = L.scr_h / 6;
+    lv_obj_t* btn = lv_obj_create(parent);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_pos(btn, x, L.scr_h - h - L.margin * 2);
+    lv_obj_set_style_bg_color(btn, bg, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_radius(btn, 18, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, alarm_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, L.ag_btn_font, 0);
+    lv_obj_set_style_text_color(lbl, fg, 0);
+    lv_obj_center(lbl);
+    return btn;
+}
+
+static void init_alarm_screen(lv_obj_t* scr) {
+    alarm_container = lv_obj_create(scr);
+    lv_obj_set_size(alarm_container, L.scr_w, L.scr_h);
+    lv_obj_set_pos(alarm_container, 0, 0);
+    lv_obj_set_style_bg_color(alarm_container, COL_BG, 0);
+    lv_obj_set_style_bg_opa(alarm_container, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(alarm_container, 0, 0);
+    lv_obj_set_style_pad_all(alarm_container, 0, 0);
+    lv_obj_clear_flag(alarm_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(alarm_container, LV_OBJ_FLAG_HIDDEN);
+
+    al_kicker = lv_label_create(alarm_container);
+    lv_label_set_text(al_kicker, "REMINDER");
+    lv_obj_set_style_text_font(al_kicker, L.ag_kicker_font, 0);
+    lv_obj_set_style_text_color(al_kicker, COL_ACCENT, 0);
+    lv_obj_align(al_kicker, LV_ALIGN_TOP_MID, 0, L.scr_h / 5);
+
+    al_title = lv_label_create(alarm_container);
+    lv_label_set_text(al_title, "");
+    lv_obj_set_style_text_font(al_title, L.ag_alarm_font, 0);
+    lv_obj_set_style_text_color(al_title, COL_TEXT, 0);
+    lv_obj_set_style_text_align(al_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(al_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(al_title, L.content_w);
+    lv_obj_align(al_title, LV_ALIGN_TOP_MID, 0, L.scr_h / 5 + 40);
+
+    al_time = lv_label_create(alarm_container);
+    lv_label_set_text(al_time, "");
+    lv_obj_set_style_text_font(al_time, L.ag_time_font, 0);
+    lv_obj_set_style_text_color(al_time, COL_DIM, 0);
+    lv_obj_align(al_time, LV_ALIGN_TOP_MID, 0, L.scr_h * 3 / 5);
+
+    // Two targets, thumb-sized: no physical button is free for this.
+    al_btn_snooze = make_alarm_button(alarm_container, L.margin,
+                                      "+10 MIN", COL_PANEL, COL_TEXT);
+    al_btn_done   = make_alarm_button(alarm_container,
+                                      L.margin + (L.content_w - L.margin) / 2 + L.margin,
+                                      "DONE", COL_ACCENT, COL_BG);
+}
+
 // ======== Public API ========
 
 void ui_init(void) {
@@ -557,6 +879,8 @@ void ui_init(void) {
     init_battery_icons();
 
     init_usage_screen(scr);
+    init_agenda_screen(scr);
+    init_alarm_screen(scr);
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -759,33 +1083,41 @@ void ui_tick_anim(void) {
 static screen_t prev_non_splash_screen = SCREEN_USAGE;
 static void apply_battery_visibility(void) {
     if (!battery_img) return;
-    if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-    else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    if (current_screen == SCREEN_SPLASH || current_screen == SCREEN_ALARM)
+        lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void global_click_cb(lv_event_t* e) {
     (void)e;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    ui_next_screen();
 }
 
 void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+    if (agenda_container) lv_obj_add_flag(agenda_container, LV_OBJ_FLAG_HIDDEN);
+    if (alarm_container)  lv_obj_add_flag(alarm_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
     case SCREEN_SPLASH:  splash_show(); break;
     case SCREEN_USAGE:   lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_AGENDA:  lv_obj_clear_flag(agenda_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_ALARM:   lv_obj_clear_flag(alarm_container, LV_OBJ_FLAG_HIDDEN); break;
     default: break;
     }
 
-    splash_mascot_set_visible(screen != SCREEN_SPLASH);
+    // The corner mascot lives on the root screen, so it would sit on top of
+    // the agenda's date line and the alarm's copy. It belongs to the usage
+    // view only.
+    splash_mascot_set_visible(screen == SCREEN_USAGE);
     if (logo_img) {
-        if (screen == SCREEN_SPLASH) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else                          lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        if (screen == SCREEN_USAGE) lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else                         lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
+    if (screen != SCREEN_SPLASH && screen != SCREEN_ALARM) prev_non_splash_screen = screen;
     current_screen = screen;
     apply_battery_visibility();
 }
@@ -827,4 +1159,154 @@ void ui_update_battery(int percent, bool charging) {
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
     apply_battery_visibility();
+}
+
+
+// ======== Agenda public API ========
+
+// The wall clock the daemon last handed us, carried forward by the tick
+// counter. Both screens read the same base, so they can never disagree.
+static long now_epoch(void) {
+    if (clock_base_epoch == 0) return 0;
+    return clock_base_epoch + (long)((lv_tick_get() - clock_base_ms) / 1000);
+}
+
+// Lay out the hero card for whatever items[0] currently is. Split out because
+// the per-second tick redraws only this part.
+static void render_agenda_hero(void) {
+    if (!agenda.valid || agenda.count == 0) return;
+    const AgendaItem& it = agenda.items[0];
+    const long now = now_epoch();
+    char buf[64];
+
+    const long end = it.start_epoch + (long)it.duration_min * 60;
+    const bool running = (it.duration_min > 0 && now >= it.start_epoch && now < end);
+
+    if (running) {
+        const long left_min = (end - now + 59) / 60;
+        snprintf(buf, sizeof(buf), "NOW - %ld MIN LEFT", left_min);
+        lv_obj_set_style_text_color(ag_kicker, COL_GREEN, 0);
+        lv_obj_set_style_bg_color(ag_stripe, COL_GREEN, 0);
+        const long span = end - it.start_epoch;
+        const int  pct  = span > 0 ? (int)((now - it.start_epoch) * 100 / span) : 0;
+        lv_bar_set_value(ag_progress, pct, LV_ANIM_OFF);
+        lv_obj_clear_flag(ag_progress, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        format_lead_time(it.start_epoch - now, buf, sizeof(buf));
+        lv_obj_set_style_text_color(ag_kicker, agenda_color(it.color), 0);
+        lv_obj_set_style_bg_color(ag_stripe, agenda_color(it.color), 0);
+        lv_obj_add_flag(ag_progress, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_label_set_text(ag_kicker, buf);
+
+    lv_label_set_text(ag_title, it.title);
+
+    char from[12];
+    format_clock_time(it.start_epoch, from, sizeof(from));
+    if (it.duration_min > 0) {
+        char to[12];
+        format_clock_time(end, to, sizeof(to));
+        snprintf(buf, sizeof(buf), "%s - %s", from, to);
+    } else {
+        snprintf(buf, sizeof(buf), "%s - reminder", from);
+    }
+    lv_label_set_text(ag_meta, buf);
+}
+
+static void render_agenda(void) {
+    if (!agenda_container) return;
+
+    lv_label_set_text(ag_date, agenda.date);
+
+    const bool empty = (agenda.count == 0);
+    if (empty) {
+        lv_obj_add_flag(ag_hero, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ag_foot, LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < AGENDA_MAX_ITEMS - 1; i++) {
+            lv_obj_add_flag(agenda_rows[i].group, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(agenda_rows[i].rule, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_clear_flag(ag_empty_group, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_add_flag(ag_empty_group, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(ag_hero, LV_OBJ_FLAG_HIDDEN);
+    render_agenda_hero();
+
+    for (int i = 0; i < AGENDA_MAX_ITEMS - 1; i++) {
+        AgendaRow& r = agenda_rows[i];
+        const int idx = i + 1;
+        if (idx >= agenda.count || i >= L.ag_rows) {
+            lv_obj_add_flag(r.group, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(r.rule, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        const AgendaItem& it = agenda.items[idx];
+        char t[12];
+        format_clock_time(it.start_epoch, t, sizeof(t));
+        lv_label_set_text(r.time, t);
+        lv_label_set_text(r.name, it.title);
+        lv_obj_set_style_bg_color(r.dot, agenda_color(it.color), 0);
+        // Shape carries the kind, colour is already spoken for by the calendar.
+        lv_obj_set_style_radius(r.dot, it.is_reminder ? 2 : LV_RADIUS_CIRCLE, 0);
+        lv_obj_clear_flag(r.group, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(r.rule, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (agenda.more > 0) {
+        lv_label_set_text_fmt(ag_foot, "+%d later", agenda.more);
+        lv_obj_clear_flag(ag_foot, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(ag_foot, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_update_agenda(const AgendaData* data) {
+    if (!data || !data->valid) return;
+    agenda = *data;
+    if (data->clock_epoch > 0) {
+        clock_base_epoch = data->clock_epoch;
+        clock_base_ms = lv_tick_get();
+    }
+    ag_last_kicker_sec = -1;
+    render_agenda();
+}
+
+// Called every loop; relays the hero card once a second so the countdown stays
+// honest without the daemon having to poll at that rate.
+void ui_tick_agenda(void) {
+    if (current_screen != SCREEN_AGENDA) return;
+    if (!agenda.valid || agenda.count == 0) return;
+    const int sec = (int)(lv_tick_get() / 1000);
+    if (sec == ag_last_kicker_sec) return;
+    ag_last_kicker_sec = sec;
+    render_agenda_hero();
+}
+
+void ui_show_alarm(const AgendaItem* item) {
+    if (!item || !alarm_container) return;
+    alarm_item = *item;
+    alarm_item_valid = true;
+    lv_label_set_text(al_kicker, item->is_reminder ? "REMINDER" : "STARTING NOW");
+    lv_label_set_text(al_title, item->title);
+    char t[12];
+    format_clock_time(item->start_epoch, t, sizeof(t));
+    lv_label_set_text(al_time, t);
+    ui_show_screen(SCREEN_ALARM);
+}
+
+void ui_set_alarm_action_cb(ui_alarm_action_cb cb) {
+    alarm_cb = cb;
+}
+
+// Tap / swipe rotation. The alarm screen is deliberately outside it: it is
+// dismissed by acting on it, not by browsing past it.
+void ui_next_screen(void) {
+    switch (current_screen) {
+    case SCREEN_USAGE:  ui_show_screen(SCREEN_AGENDA); break;
+    case SCREEN_AGENDA: ui_show_screen(SCREEN_SPLASH); break;
+    case SCREEN_SPLASH: ui_show_screen(SCREEN_USAGE);  break;
+    default: break;
+    }
 }

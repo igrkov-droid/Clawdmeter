@@ -124,6 +124,129 @@ static bool parse_json(const char* json, UsageData* out) {
     return true;
 }
 
+// ---- Agenda (companion channel) ----
+
+static AgendaData agenda;
+
+// Alarms already answered, so a re-sent payload doesn't ring twice. Four slots
+// is one per item: the daemon never has more than that in flight.
+static char fired_handles[AGENDA_MAX_ITEMS][AGENDA_HANDLE_LEN];
+static int  fired_next = 0;
+
+static bool alarm_already_fired(const char* handle) {
+    for (int i = 0; i < AGENDA_MAX_ITEMS; i++)
+        if (strcmp(fired_handles[i], handle) == 0) return true;
+    return false;
+}
+
+static void mark_alarm_fired(const char* handle) {
+    strlcpy(fired_handles[fired_next], handle, AGENDA_HANDLE_LEN);
+    fired_next = (fired_next + 1) % AGENDA_MAX_ITEMS;
+}
+
+// Wall clock carried forward between payloads, so alarms fire on time even
+// while the link is down. Both the usage and the agenda payload feed it.
+static long     wall_base_epoch = 0;
+static uint32_t wall_base_ms = 0;
+
+static void note_wall_clock(long epoch) {
+    if (epoch <= 0) return;
+    wall_base_epoch = epoch;
+    wall_base_ms = millis();
+}
+
+static long wall_now(void) {
+    if (wall_base_epoch == 0) return 0;
+    return wall_base_epoch + (long)((millis() - wall_base_ms) / 1000);
+}
+
+static bool parse_agenda(const char* json, AgendaData* out) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        Serial.printf("agenda parse error: %s\n", err.c_str());
+        return false;
+    }
+    if (strcmp(doc["k"] | "", "agenda") != 0) {
+        Serial.println("companion payload of unknown kind — ignored");
+        return false;
+    }
+
+    out->clock_epoch = doc["t"] | 0L;
+    out->more  = doc["m"] | 0;
+    out->quiet = doc["q"] | false;
+    strlcpy(out->date, doc["d"] | "", sizeof(out->date));
+
+    out->count = 0;
+    for (JsonObject e : doc["e"].as<JsonArray>()) {
+        if (out->count >= AGENDA_MAX_ITEMS) break;
+        AgendaItem& it = out->items[out->count];
+        it.start_epoch  = e["s"] | 0L;
+        it.alarm_epoch  = e["a"] | 0L;
+        it.duration_min = e["dur"] | 0;
+        it.color        = (unsigned char)(e["c"] | 0);
+        it.is_reminder  = e["r"] | false;
+        strlcpy(it.title, e["n"] | "", sizeof(it.title));
+        strlcpy(it.handle, e["h"] | "", sizeof(it.handle));
+        out->count++;
+    }
+    out->valid = true;
+    return true;
+}
+
+// Ring for anything whose alarm has come due. The board owns this timing on
+// purpose: a reminder that only fires when the mac is awake is not a reminder.
+static void check_agenda_alarms(void) {
+    if (!agenda.valid) return;
+    const long now = wall_now();
+    if (now == 0) return;
+    if (ui_get_current_screen() == SCREEN_ALARM) return;
+
+    for (int i = 0; i < agenda.count; i++) {
+        const AgendaItem& it = agenda.items[i];
+        if (it.alarm_epoch <= 0 || it.alarm_epoch > now) continue;
+        if (it.handle[0] == '\0' || alarm_already_fired(it.handle)) continue;
+
+        mark_alarm_fired(it.handle);
+        idle_note_activity();            // wake the panel if it had gone dark
+        if (!agenda.quiet) sound_hal_play_reset();
+        ui_show_alarm(&it);
+        Serial.printf("agenda alarm: %s%s\n", it.title, agenda.quiet ? " (quiet)" : "");
+        return;                          // one at a time; the rest wait their turn
+    }
+}
+
+// The user answered a ringing reminder. Snoozing is the daemon's job — it
+// reschedules and sends a fresh payload — so the board only reports the press.
+static void on_alarm_action(const char* handle, bool done) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "{\"a\":\"%s\",\"h\":\"%s\"}",
+             done ? "done" : "snooze", handle);
+    ble_companion_notify(msg);
+    Serial.printf("agenda action: %s\n", msg);
+}
+
+// Feed the agenda screen a canned payload over serial, so the layout can be
+// flashed and screenshotted before the companion daemon exists. Times are
+// relative to now, so the countdown and the "running" state both animate.
+static void inject_demo_agenda(void) {
+    const long base = wall_now() ? wall_now() : 1757340000L;  // arbitrary but sane
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{\"k\":\"agenda\",\"t\":%ld,\"d\":\"Mon 8 Sep\",\"m\":2,\"e\":["
+        "{\"s\":%ld,\"dur\":45,\"n\":\"Sync with Lisa\",\"h\":\"a1\",\"c\":0,\"a\":0},"
+        "{\"s\":%ld,\"dur\":60,\"n\":\"Estimate review\",\"h\":\"a2\",\"c\":1,\"a\":0},"
+        "{\"s\":%ld,\"dur\":0,\"n\":\"Collect the order\",\"h\":\"a3\",\"c\":0,\"r\":true,\"a\":%ld},"
+        "{\"s\":%ld,\"dur\":90,\"n\":\"Dinner at Mark's\",\"h\":\"a4\",\"c\":2,\"a\":0}]}",
+        base, base + 720, base + 5400, base + 9000, base + 30, base + 16200);
+    if (parse_agenda(json, &agenda)) {
+        note_wall_clock(agenda.clock_epoch);
+        ui_update_agenda(&agenda);
+        ui_show_screen(SCREEN_AGENDA);
+        Serial.println("demo agenda loaded — the reminder rings in 30 s");
+    }
+}
+
 // ---- Serial command buffer ----
 #define CMD_BUF_SIZE 64
 static char cmd_buf[CMD_BUF_SIZE];
@@ -174,6 +297,7 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
+            else if (strcmp(cmd_buf, "agenda") == 0) inject_demo_agenda();
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -231,6 +355,7 @@ void setup() {
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
+    ui_set_alarm_action_cb(on_alarm_action);
     ui_show_screen(SCREEN_SPLASH);
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
@@ -371,8 +496,19 @@ void loop() {
 
     check_serial_cmd();
 
+    if (ble_has_companion()) {
+        if (parse_agenda(ble_get_companion(), &agenda)) {
+            note_wall_clock(agenda.clock_epoch);
+            ui_update_agenda(&agenda);
+        }
+    }
+
+    ui_tick_agenda();
+    check_agenda_alarms();
+
     if (ble_has_data()) {
         if (parse_json(ble_get_data(), &usage)) {
+            note_wall_clock(usage.clock_epoch);
             int g_before = usage_rate_group();
             bool session_reset = usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();

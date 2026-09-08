@@ -14,7 +14,12 @@
 // wakes from sleep when USB is plugged back in). Useful when sitting on a
 // desk plugged in — also covers battery-less hardware that's always on USB.
 // Set true to sleep regardless of power source.
-#define IDLE_SLEEP_WHEN_CHARGING    false
+//
+// True since the agenda screen: a desk companion shows the same handful of
+// rows for hours at a stretch, and a static image left lit on an AMOLED burns
+// in. A ringing reminder wakes the panel on its own, so sleeping costs nothing
+// that matters.
+#define IDLE_SLEEP_WHEN_CHARGING    true
 
 // When true, a touch on the dark panel wakes the device (first touch is
 // consumed for wake only, second touch acts normally). When false, touch is

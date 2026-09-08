@@ -21,6 +21,13 @@ void ble_send_ack(void);
 void ble_send_nack(void);
 void ble_request_refresh(void);
 
+// Companion channel (agenda in, user actions out). Payloads arrive framed and
+// are reassembled inside ble.cpp, so ble_get_companion() always hands back one
+// whole JSON document. Reading it clears the ready flag.
+bool ble_has_companion(void);
+const char* ble_get_companion(void);
+void ble_companion_notify(const char* json);
+
 void ble_set_battery_level(int pct);
 
 // BLE HID keyboard
