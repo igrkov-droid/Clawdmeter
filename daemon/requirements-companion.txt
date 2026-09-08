@@ -1,0 +1,5 @@
+# Companion daemon (calendar + reminders). macOS only: EventKit has no
+# equivalent elsewhere, and the usage daemon's own deps are separate.
+bleak>=0.22
+pyobjc-framework-EventKit>=10.0
+pyobjc-framework-Cocoa>=10.0

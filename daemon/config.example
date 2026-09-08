@@ -30,3 +30,10 @@ chime = off
 #   12   = show the clock, forced 12-hour  (e.g. 6:28 PM)
 #   24   = show the clock, forced 24-hour  (e.g. 18:28)
 clock = off
+
+# Quiet hours for the agenda companion (clawdmeter_companion.py). Inside this
+# window a reminder still lights the screen, it just doesn't ring — a device
+# that wakes you at 07:00 on a Sunday gets unplugged.
+#   Unset (default) = the board rings whenever an alarm comes due.
+#   HH:MM-HH:MM     = silent window; crossing midnight is fine.
+# agenda_quiet = 22:00-08:00
