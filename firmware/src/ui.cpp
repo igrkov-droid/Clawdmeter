@@ -58,6 +58,7 @@ struct Layout {
     int16_t idle_px;                 // sleeping-creature size on the idle screen
 
     // Agenda screen
+    int16_t ag_date_y;               // baseline of the date, level with the battery
     int16_t ag_hero_y, ag_hero_h;
     int16_t ag_row_y, ag_row_h;
     int16_t ag_foot_y;
@@ -124,8 +125,9 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 16;
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
+        L.ag_date_y = 47;            // centres 14px type against the 48px battery at y=30
         L.ag_hero_y = 64;
-        L.ag_hero_h = 168;
+        L.ag_hero_h = 148;
         L.ag_row_y = 252;
         L.ag_row_h = 52;
         L.ag_foot_y = 424;
@@ -152,8 +154,9 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 12;
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;
+        L.ag_date_y = 47;
         L.ag_hero_y = 58;
-        L.ag_hero_h = 150;
+        L.ag_hero_h = 132;
         L.ag_row_y = 224;
         L.ag_row_h = 46;
         L.ag_foot_y = 400;
@@ -208,8 +211,9 @@ static void compute_layout(const BoardCaps& c) {
         L.pair_y2 = 56;
         L.pair_y3 = 80;
         L.idle_px = 96;
+        L.ag_date_y = 16;            // 24px battery at y=10
         L.ag_hero_y = 30;
-        L.ag_hero_h = 92;
+        L.ag_hero_h = 82;
         L.ag_row_y = 128;
         L.ag_row_h = 34;
         L.ag_foot_y = 208;
@@ -696,7 +700,7 @@ static void init_agenda_screen(lv_obj_t* scr) {
     lv_obj_add_event_cb(agenda_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     ag_date = make_agenda_label(agenda_container, L.ag_foot_font, COL_DIM,
-                                L.margin, L.title_y / 2);
+                                L.margin, L.ag_date_y);
 
     // Hero card — the one thing readable from across the desk.
     ag_hero = make_panel(agenda_container, L.margin, L.ag_hero_y,
@@ -719,7 +723,11 @@ static void init_agenda_screen(lv_obj_t* scr) {
     lv_obj_set_width(ag_title, hero_inner_w - 8);
     ag_meta   = make_agenda_label(ag_hero, L.ag_meta_font, COL_DIM, 8, L.ag_hero_h * 5 / 8);
 
-    ag_progress = make_bar(ag_hero, 8, L.ag_hero_h - 2 * L.panel_pad_y - 8,
+    // Under the card, not inside it: an event that isn't running yet has no
+    // progress to show, and a permanent gap reserved for one reads as a
+    // layout mistake rather than an empty state.
+    ag_progress = make_bar(agenda_container, L.margin + L.panel_pad_x + 8,
+                           L.ag_hero_y + L.ag_hero_h + 10,
                            hero_inner_w - 8, 6);
     lv_obj_set_style_bg_color(ag_progress, COL_GREEN, LV_PART_INDICATOR);
     lv_obj_add_flag(ag_progress, LV_OBJ_FLAG_HIDDEN);
