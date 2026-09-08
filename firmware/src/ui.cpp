@@ -672,6 +672,8 @@ static void format_lead_time(long secs, char* buf, size_t len) {
     else                 snprintf(buf, len, "IN %ld H", mins / 60);
 }
 
+static void render_agenda(void);
+
 static lv_obj_t* make_agenda_label(lv_obj_t* parent, const lv_font_t* font,
                                    lv_color_t color, int x, int y) {
     lv_obj_t* lbl = lv_label_create(parent);
@@ -787,7 +789,7 @@ static void init_agenda_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(ag_empty_sub, COL_DIM, 0);
     lv_obj_align(ag_empty_sub, LV_ALIGN_TOP_MID, 0, L.ag_hero_y + 78);
 
-    lv_obj_add_flag(ag_empty_group, LV_OBJ_FLAG_HIDDEN);
+    render_agenda();   // start in the empty state rather than a bare skeleton
 }
 
 // ======== Alarm Screen ========
@@ -1218,7 +1220,15 @@ static void render_agenda(void) {
 
     lv_label_set_text(ag_date, agenda.date);
 
-    const bool empty = (agenda.count == 0);
+    // Before the first payload the screen would otherwise show its bare
+    // skeleton — a panel, three rules and three default-styled dots — which
+    // reads as a broken screen rather than an empty one.
+    lv_label_set_text(ag_empty_title,
+                      agenda.valid ? "Nothing left today" : "No agenda yet");
+    lv_label_set_text(ag_empty_sub,
+                      agenda.valid ? "" : "Waiting for the companion daemon");
+
+    const bool empty = (!agenda.valid || agenda.count == 0);
     if (empty) {
         lv_obj_add_flag(ag_hero, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ag_foot, LV_OBJ_FLAG_HIDDEN);
