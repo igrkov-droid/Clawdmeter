@@ -126,8 +126,8 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
         L.ag_date_y = 47;            // centres 14px type against the 48px battery at y=30
-        L.ag_hero_y = 64;
-        L.ag_hero_h = 148;
+        L.ag_hero_y = 92;            // clears the 48px battery, which ends at 78
+        L.ag_hero_h = 132;
         L.ag_row_y = 252;
         L.ag_row_h = 52;
         L.ag_foot_y = 424;
@@ -155,9 +155,9 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;
         L.ag_date_y = 47;
-        L.ag_hero_y = 58;
-        L.ag_hero_h = 132;
-        L.ag_row_y = 224;
+        L.ag_hero_y = 86;
+        L.ag_hero_h = 118;
+        L.ag_row_y = 232;
         L.ag_row_h = 46;
         L.ag_foot_y = 400;
         L.ag_rows = 3;
@@ -212,9 +212,9 @@ static void compute_layout(const BoardCaps& c) {
         L.pair_y3 = 80;
         L.idle_px = 96;
         L.ag_date_y = 16;            // 24px battery at y=10
-        L.ag_hero_y = 30;
-        L.ag_hero_h = 82;
-        L.ag_row_y = 128;
+        L.ag_hero_y = 42;            // clears the 24px battery, which ends at 34
+        L.ag_hero_h = 76;
+        L.ag_row_y = 140;
         L.ag_row_h = 34;
         L.ag_foot_y = 208;
         L.ag_rows = 2;
@@ -789,13 +789,13 @@ static void init_agenda_screen(lv_obj_t* scr) {
     lv_label_set_text(ag_empty_title, "Nothing left today");
     lv_obj_set_style_text_font(ag_empty_title, L.ag_title_font, 0);
     lv_obj_set_style_text_color(ag_empty_title, COL_TEXT, 0);
-    lv_obj_align(ag_empty_title, LV_ALIGN_TOP_MID, 0, L.ag_hero_y + 24);
+    lv_obj_align(ag_empty_title, LV_ALIGN_CENTER, 0, -22);
 
     ag_empty_sub = lv_label_create(ag_empty_group);
     lv_label_set_text(ag_empty_sub, "");
     lv_obj_set_style_text_font(ag_empty_sub, L.ag_meta_font, 0);
     lv_obj_set_style_text_color(ag_empty_sub, COL_DIM, 0);
-    lv_obj_align(ag_empty_sub, LV_ALIGN_TOP_MID, 0, L.ag_hero_y + 78);
+    lv_obj_align(ag_empty_sub, LV_ALIGN_CENTER, 0, 26);
 
     render_agenda();   // start in the empty state rather than a bare skeleton
 }
