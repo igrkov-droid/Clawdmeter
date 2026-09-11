@@ -759,6 +759,10 @@ static void init_agenda_screen(lv_obj_t* scr) {
     ag_title  = make_agenda_label(ag_hero, L.ag_title_font, COL_TEXT, 8, L.ag_hero_h / 4);
     lv_label_set_long_mode(ag_title, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ag_title, hero_inner_w - 8);
+    // Pin the height to one line. LV_LABEL_LONG_DOT only clips what exceeds
+    // the label's *height*; with the height left to grow, a long title simply
+    // wrapped onto a second line and drew straight over the time below it.
+    lv_obj_set_height(ag_title, lv_font_get_line_height(L.ag_title_font));
     ag_meta   = make_agenda_label(ag_hero, L.ag_meta_font, COL_DIM, 8, L.ag_hero_h * 5 / 8);
 
     // Under the card, not inside it: an event that isn't running yet has no
@@ -808,6 +812,9 @@ static void init_agenda_screen(lv_obj_t* scr) {
                                    L.content_w / 6 + 26, text_y);
         lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
         lv_obj_set_width(r.name, L.content_w - (L.content_w / 6 + 26));
+        // One line, same reason as the hero title: without a fixed height the
+        // label wraps and the second line lands on the row below.
+        lv_obj_set_height(r.name, lv_font_get_line_height(L.ag_row_font));
     }
 
     ag_foot = make_agenda_label(agenda_container, L.ag_foot_font, COL_DIM,
