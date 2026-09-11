@@ -19,13 +19,20 @@ LV_FONT_DECLARE(font_styrene_14);
 LV_FONT_DECLARE(font_styrene_12);
 LV_FONT_DECLARE(font_mono_32);
 LV_FONT_DECLARE(font_mono_18);
+LV_FONT_DECLARE(font_mono_24);
 
 // Cyrillic faces. Tiempos and Styrene ship no Cyrillic glyphs whatsoever, so a
 // Russian event title renders as blank space. PT Serif and PT Sans supply the
 // missing characters; see link_cyrillic_fallbacks() below.
+LV_FONT_DECLARE(font_styrene_26);
+LV_FONT_DECLARE(font_styrene_34);
 LV_FONT_DECLARE(font_cyr_serif_34);
 LV_FONT_DECLARE(font_cyr_serif_56);
 LV_FONT_DECLARE(font_cyr_sans_20);
+LV_FONT_DECLARE(font_cyr_sans_26);
+LV_FONT_DECLARE(font_cyr_sans_28);
+LV_FONT_DECLARE(font_cyr_sans_34);
+LV_FONT_DECLARE(font_cyr_sans_48);
 
 // Layout values computed from the active board's geometry. Populated once
 // in ui_init() and treated as const for the rest of the program. Adding a
@@ -68,6 +75,7 @@ struct Layout {
     int16_t ag_date_y;               // baseline of the date, level with the battery
     int16_t ag_hero_y, ag_hero_h;
     int16_t ag_row_y, ag_row_h;
+    int16_t ag_time_w;               // time/date column before the coloured dot
     int16_t ag_foot_y;
     uint8_t ag_rows;                 // list rows below the hero card that fit
     const lv_font_t* ag_kicker_font; // "IN 12 MIN" over the hero card
@@ -165,12 +173,22 @@ static void compute_layout(const BoardCaps& c) {
         L.ag_foot_y = 424;
         L.ag_rows = 3;
         L.ag_kicker_font = &font_styrene_16;
-        L.ag_title_font  = &font_tiempos_34;
-        L.ag_meta_font   = &font_styrene_20;
-        L.ag_row_font    = &font_styrene_20;
-        L.ag_time_font   = &font_mono_18;
+        // Sans across the whole agenda. Tiempos carries no Cyrillic, so a
+        // Russian title already came from the fallback — which left Latin
+        // titles serifed and Russian ones not, in the same list. One family
+        // for both reads as a decision rather than an accident.
+        L.ag_title_font  = &font_styrene_34;
+        // The agenda is read from across a desk, not from a phone's distance:
+        // 26 over 20 is the size the owner asked for after living with it.
+        L.ag_meta_font   = &font_styrene_28;
+        L.ag_row_font    = &font_styrene_28;
+        // Wide enough for "25 Sep" at this size. It used to be a sixth of the
+        // content width, which fit a clock but not a date in the larger face.
+        L.ag_time_w      = 104;
+        // Matched to the 26px row text; the 18px mono looked stunted beside it.
+        L.ag_time_font   = &font_mono_24;
         L.ag_foot_font   = &font_styrene_14;
-        L.ag_alarm_font  = &font_tiempos_56;
+        L.ag_alarm_font  = &font_styrene_48;
         L.ag_btn_font    = &font_styrene_24;
         L.bt_info_panel_h = 160;
         L.bt_reset_zone_h = 110;
@@ -197,6 +215,7 @@ static void compute_layout(const BoardCaps& c) {
         L.ag_title_font  = &font_tiempos_34;
         L.ag_meta_font   = &font_styrene_16;
         L.ag_row_font    = &font_styrene_16;
+        L.ag_time_w      = 76;
         L.ag_time_font   = &font_mono_18;
         L.ag_foot_font   = &font_styrene_12;
         L.ag_alarm_font  = &font_tiempos_34;
@@ -270,10 +289,19 @@ static void compute_layout(const BoardCaps& c) {
     L.content_w = L.scr_w - 2 * L.margin;
 
     // Wrap the user-text slots so Cyrillic resolves through PT Serif / PT Sans.
-    L.ag_title_font = with_fallback(&f_title_ru, L.ag_title_font, &font_cyr_serif_34);
-    L.ag_alarm_font = with_fallback(&f_alarm_ru, L.ag_alarm_font, &font_cyr_serif_56);
-    L.ag_row_font   = with_fallback(&f_row_ru,   L.ag_row_font,   &font_cyr_sans_20);
-    L.ag_meta_font  = with_fallback(&f_meta_ru,  L.ag_meta_font,  &font_cyr_sans_20);
+    // Pair each slot with the Cyrillic face nearest its own size, so a mixed
+    // title does not step between two optical sizes mid-line.
+    const lv_font_t* cyr_head  = (L.ag_title_font == &font_styrene_34) ? &font_cyr_sans_34
+                               : &font_cyr_serif_34;
+    const lv_font_t* cyr_alarm = (L.ag_alarm_font == &font_styrene_48) ? &font_cyr_sans_48
+                               : &font_cyr_serif_56;
+    const lv_font_t* cyr_body  = (L.ag_row_font == &font_styrene_28) ? &font_cyr_sans_28
+                               : (L.ag_row_font == &font_styrene_26) ? &font_cyr_sans_26
+                               : &font_cyr_sans_20;
+    L.ag_title_font = with_fallback(&f_title_ru, L.ag_title_font, cyr_head);
+    L.ag_alarm_font = with_fallback(&f_alarm_ru, L.ag_alarm_font, cyr_alarm);
+    L.ag_row_font   = with_fallback(&f_row_ru,   L.ag_row_font,   cyr_body);
+    L.ag_meta_font  = with_fallback(&f_meta_ru,  L.ag_meta_font,  cyr_body);
 }
 
 // Anthropic brand palette — design tokens live in theme.h
@@ -281,6 +309,7 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_BG        THEME_BG
 #define COL_PANEL     THEME_PANEL
 #define COL_TEXT      THEME_TEXT
+#define COL_TEXT_SOFT THEME_TEXT_SOFT
 #define COL_DIM       THEME_DIM
 #define COL_ACCENT    THEME_ACCENT
 #define COL_GREEN     THEME_GREEN
@@ -759,7 +788,7 @@ static void init_agenda_screen(lv_obj_t* scr) {
 
     const int hero_inner_w = L.content_w - 2 * L.panel_pad_x;
     ag_kicker = make_agenda_label(ag_hero, L.ag_kicker_font, COL_ACCENT, 8, 4);
-    ag_title  = make_agenda_label(ag_hero, L.ag_title_font, COL_TEXT, 8, L.ag_hero_h / 4);
+    ag_title  = make_agenda_label(ag_hero, L.ag_title_font, COL_TEXT_SOFT, 8, L.ag_hero_h / 4);
     lv_label_set_long_mode(ag_title, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ag_title, hero_inner_w - 8);
     // Pin the height to one line. LV_LABEL_LONG_DOT only clips what exceeds
@@ -806,15 +835,15 @@ static void init_agenda_screen(lv_obj_t* scr) {
 
         r.dot = lv_obj_create(r.group);
         lv_obj_set_size(r.dot, 9, 9);
-        lv_obj_set_pos(r.dot, L.content_w / 6, L.ag_row_h / 2 - 4);
+        lv_obj_set_pos(r.dot, L.ag_time_w, L.ag_row_h / 2 - 4);
         lv_obj_set_style_border_width(r.dot, 0, 0);
         lv_obj_set_style_bg_opa(r.dot, LV_OPA_COVER, 0);
         lv_obj_add_flag(r.dot, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-        r.name = make_agenda_label(r.group, L.ag_row_font, COL_TEXT,
-                                   L.content_w / 6 + 26, text_y);
+        r.name = make_agenda_label(r.group, L.ag_row_font, COL_TEXT_SOFT,
+                                   L.ag_time_w + 26, text_y);
         lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(r.name, L.content_w - (L.content_w / 6 + 26));
+        lv_obj_set_width(r.name, L.content_w - (L.ag_time_w + 26));
         // One line, same reason as the hero title: without a fixed height the
         // label wraps and the second line lands on the row below.
         lv_obj_set_height(r.name, lv_font_get_line_height(L.ag_row_font));
