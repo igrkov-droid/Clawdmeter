@@ -68,6 +68,9 @@ HORIZON_HOURS = 36          # how far ahead to look for the "next up" list
 
 MAX_ITEMS = 4               # must match AGENDA_MAX_ITEMS in firmware/src/data.h
 TITLE_CHARS = 24            # what one row shows at styrene_20 on a 480px panel
+TITLE_BYTES = 63            # AGENDA_TITLE_LEN in firmware/src/data.h, minus the NUL.
+                            # Cyrillic is two bytes per letter, so the glyph
+                            # budget alone does not keep a title inside it.
 SNOOZE_MINUTES = 10
 
 # One ATT write without response is capped at MTU-3, which is 182 bytes on
@@ -342,10 +345,22 @@ def calendar_color_index(cal) -> int:
 # ---------------------------------------------------------------- payload
 
 def truncate(title: str) -> str:
+    """Fit a title into both budgets: glyphs on screen and bytes on the wire.
+
+    Counting characters alone is not enough. The firmware copies the title into
+    a fixed byte buffer, and a Cyrillic letter costs two bytes there — so a
+    title inside the glyph limit can still overrun the buffer and get cut again
+    on the device, mid-character.
+    """
     title = " ".join(title.split())
-    if len(title) <= TITLE_CHARS:
+    if len(title) <= TITLE_CHARS and len(title.encode()) <= TITLE_BYTES:
         return title
-    return title[: TITLE_CHARS - 1].rstrip() + "…"
+
+    budget = TITLE_BYTES - len("…".encode())
+    out = title[: TITLE_CHARS - 1]
+    while out and len(out.encode()) > budget:
+        out = out[:-1]
+    return out.rstrip() + "…"
 
 
 def build_payload(items: list[dict], more: int, quiet: bool) -> dict:

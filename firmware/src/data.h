@@ -25,7 +25,9 @@ struct UsageData {
 // The board only counts time, so "in 12 min" stays right between polls.
 
 #define AGENDA_MAX_ITEMS   4
-#define AGENDA_TITLE_LEN   40   // ~24 glyphs, with headroom for multi-byte UTF-8
+// 64 bytes = 24 Cyrillic glyphs plus the ellipsis, or ~60 Latin ones. The old
+// 40 fit 24 Latin glyphs but only 19 Cyrillic, so Russian titles arrived cut.
+#define AGENDA_TITLE_LEN   64
 #define AGENDA_HANDLE_LEN  9    // opaque token; the daemon maps it back to EventKit
 
 struct AgendaItem {

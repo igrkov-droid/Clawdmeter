@@ -7,4 +7,4 @@
 #            c=colour (0 accent, 1 green, 2 dim) · r=reminder · a=alarm epoch
 {"name":"ordinary day","hold_ms":600000,"k":"agenda","t":1757340000,"d":"Thu 11 Sep","m":2,"e":[{"s":1757340720,"dur":45,"n":"Созвон с Лизой","h":"a1","c":0,"a":0},{"s":1757345400,"dur":60,"n":"Смета на Sant Salvador","h":"a2","c":1,"a":0},{"s":1757349000,"dur":0,"n":"Забрать заказ","h":"a3","c":0,"r":true,"a":0},{"s":1757356200,"dur":90,"n":"Ужин у Марка","h":"a4","c":2,"a":0}]}
 {"name":"nothing today","hold_ms":600000,"k":"agenda","t":1757340000,"d":"Thu 11 Sep","m":0,"e":[]}
-{"name":"reminder rings in 20s","hold_ms":600000,"k":"agenda","t":1757340000,"d":"Thu 11 Sep","m":0,"e":[{"s":1757340020,"dur":0,"n":"Take the bread out","h":"b1","c":0,"r":true,"a":1757340020},{"s":1757343600,"dur":30,"n":"Call the plumber","h":"b2","c":1,"a":0}]}
+{"name":"reminder rings in 20s","hold_ms":600000,"k":"agenda","t":1757340000,"d":"Thu 11 Sep","m":0,"e":[{"s":1757340020,"dur":0,"n":"Вынуть хлеб из духовки","h":"b1","c":0,"r":true,"a":1757340020},{"s":1757343600,"dur":30,"n":"Позвонить сантехнику","h":"b2","c":1,"a":0}]}
