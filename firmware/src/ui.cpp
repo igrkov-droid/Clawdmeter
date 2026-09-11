@@ -1336,17 +1336,22 @@ static void render_agenda(void) {
         if (it.date_short[0]) {
             lv_label_set_text(r.time, it.date_short);
             // The mono face is for clock digits, where a fixed advance keeps
-            // the column aligned. On "17 Sep" it just opens a gap mid-string.
-            lv_obj_set_style_text_font(r.time, L.ag_foot_font, 0);
+            // the column aligned; on "17 Sep" it just opens a gap mid-string.
+            // Set at the body size, not the footnote size — this is the only
+            // thing telling you which day the row belongs to.
+            lv_obj_set_style_text_font(r.time, L.ag_meta_font, 0);
         } else {
             lv_obj_set_style_text_font(r.time, L.ag_time_font, 0);
             format_clock_time(it.start_epoch, t, sizeof(t));
             lv_label_set_text(r.time, t);
         }
-        // Within the near window the column still shows a time, so a later day
-        // is carried by colour: dim means today, accent means it isn't.
-        lv_obj_set_style_text_color(
-            r.time, days_ahead(it.start_epoch, now_epoch()) ? COL_ACCENT : COL_DIM, 0);
+        // Accent marks "not today" only where the column shows a clock and the
+        // distinction is live. In lookahead mode every row is a later day, so
+        // colouring them all says nothing — and terra-cotta on black reads at
+        // roughly 4:1, against about 10:1 for the dim grey. Legibility wins
+        // over a signal that carries no information.
+        const bool flag_day = !it.date_short[0] && days_ahead(it.start_epoch, now_epoch());
+        lv_obj_set_style_text_color(r.time, flag_day ? COL_ACCENT : COL_DIM, 0);
         lv_label_set_text(r.name, it.title);
         lv_obj_set_style_bg_color(r.dot, agenda_color(it.color), 0);
         // Shape carries the kind, colour is already spoken for by the calendar.
