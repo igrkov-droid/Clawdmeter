@@ -36,6 +36,12 @@ except ImportError:                     # pragma: no cover - defensive
     _discover_held = None
 
 import objc
+import warnings
+
+# Reading a calendar's colour hands back a raw CGColorRef, which pyobjc cannot
+# describe and warns about — once per calendar, every poll. The pointer is used
+# immediately and correctly; the warning is noise that buries the real log.
+warnings.filterwarnings("ignore", category=objc.ObjCPointerWarning)
 from Foundation import (
     NSCalendarUnitDay,
     NSCalendarUnitHour,
