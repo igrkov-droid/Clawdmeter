@@ -1228,6 +1228,17 @@ static long now_epoch(void) {
 
 // Lay out the hero card for whatever items[0] currently is. Split out because
 // the per-second tick redraws only this part.
+// Days elapsed between two local wall-clock epochs. The daemon sends local
+// time, so plain division by a day lands on calendar boundaries without any
+// timezone work here. Used to flag events that are not today: the companion
+// looks 36 hours ahead, so a bare "22:21" in the list could as easily be
+// tomorrow evening as tonight.
+static int days_ahead(long when, long now) {
+    if (when <= 0 || now <= 0) return 0;
+    const long d = when / 86400 - now / 86400;
+    return d > 0 ? (int)d : 0;
+}
+
 static void render_agenda_hero(void) {
     if (!agenda.valid || agenda.count == 0) return;
     const AgendaItem& it = agenda.items[0];
@@ -1258,12 +1269,16 @@ static void render_agenda_hero(void) {
 
     char from[12];
     format_clock_time(it.start_epoch, from, sizeof(from));
+    // Spell the day out when it isn't today — the hero is the one place with
+    // room for the word, and it is where the reader looks first.
+    const int ahead = days_ahead(it.start_epoch, now);
+    const char* day = ahead == 0 ? "" : ahead == 1 ? "Tomorrow " : "Later ";
     if (it.duration_min > 0) {
         char to[12];
         format_clock_time(end, to, sizeof(to));
-        snprintf(buf, sizeof(buf), "%s - %s", from, to);
+        snprintf(buf, sizeof(buf), "%s%s - %s", day, from, to);
     } else {
-        snprintf(buf, sizeof(buf), "%s - reminder", from);
+        snprintf(buf, sizeof(buf), "%s%s - reminder", day, from);
     }
     lv_label_set_text(ag_meta, buf);
 }
@@ -1309,6 +1324,10 @@ static void render_agenda(void) {
         char t[12];
         format_clock_time(it.start_epoch, t, sizeof(t));
         lv_label_set_text(r.time, t);
+        // The time column is too narrow for a date, so a later day is carried
+        // by colour instead: dim means today, accent means it isn't.
+        lv_obj_set_style_text_color(
+            r.time, days_ahead(it.start_epoch, now_epoch()) ? COL_ACCENT : COL_DIM, 0);
         lv_label_set_text(r.name, it.title);
         lv_obj_set_style_bg_color(r.dot, agenda_color(it.color), 0);
         // Shape carries the kind, colour is already spoken for by the calendar.
