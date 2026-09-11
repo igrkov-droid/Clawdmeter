@@ -38,6 +38,7 @@ struct AgendaItem {
     char handle[AGENDA_HANDLE_LEN];
     unsigned char color; // 0 = accent, 1 = green, 2 = dim — the calendar's colour
     bool is_reminder;    // square marker instead of a round one
+    char date_short[8];  // "16 Sep", sent only in lookahead mode; "" otherwise
 };
 
 struct AgendaData {
@@ -47,5 +48,6 @@ struct AgendaData {
     long clock_epoch;    // the daemon's wall clock when this was sent
     char date[16];       // formatted by the daemon, e.g. "Mon 8 Sep"
     bool quiet;          // inside the daemon's quiet hours — show, don't ring
+    bool lookahead;      // nothing near — these are the next few, dated
     bool valid;          // false until the first payload parses
 };

@@ -202,6 +202,7 @@ static bool parse_agenda(const char* json, AgendaData* out) {
     out->clock_epoch = doc["t"] | 0L;
     out->more  = doc["m"] | 0;
     out->quiet = doc["q"] | false;
+    out->lookahead = doc["lk"] | false;
     strlcpy(out->date, doc["d"] | "", sizeof(out->date));
 
     out->count = 0;
@@ -215,6 +216,7 @@ static bool parse_agenda(const char* json, AgendaData* out) {
         it.is_reminder  = e["r"] | false;
         strlcpy(it.title, e["n"] | "", sizeof(it.title));
         strlcpy(it.handle, e["h"] | "", sizeof(it.handle));
+        strlcpy(it.date_short, e["ds"] | "", sizeof(it.date_short));
         out->count++;
     }
     out->valid = true;

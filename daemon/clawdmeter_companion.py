@@ -65,6 +65,10 @@ POLL_INTERVAL = 30          # seconds between full EventKit sweeps
 TICK = 1.0                  # loop period; also how often store-change events are pumped
 CONNECT_TIMEOUT = 20.0
 HORIZON_HOURS = 36          # how far ahead to look for the "next up" list
+LOOKAHEAD_DAYS = 30         # when that window is empty, how far to reach for
+                            # the next thing in the calendar. An empty screen
+                            # tells you nothing; "next Tuesday" tells you where
+                            # you stand.
 
 MAX_ITEMS = 4               # must match AGENDA_MAX_ITEMS in firmware/src/data.h
 TITLE_CHARS = 24            # what one row shows at styrene_20 on a 480px panel
@@ -271,18 +275,32 @@ class Agenda:
             best = when if best is None else min(best, when)
         return best
 
-    def collect(self) -> tuple[list[dict], int]:
-        """Everything worth showing, soonest first, with the count that didn't fit."""
+    def collect(self) -> tuple[list[dict], int, bool]:
+        """Everything worth showing, soonest first, the count that didn't fit,
+        and whether we had to reach past the normal horizon to find anything.
+
+        The near window is what the screen is for: what is left today and what
+        lands tomorrow. When it holds nothing, showing an empty panel wastes
+        the display — so we look a month out and show the next few things
+        instead, dated, which is the difference between "nothing" and "nothing
+        until Tuesday"."""
         now = NSDate.date()
         end = NSDate.dateWithTimeIntervalSinceNow_(HORIZON_HOURS * 3600)
         items = self._events(now, end) + self._reminders(now, end)
+        lookahead = False
+
+        if not items:
+            far = NSDate.dateWithTimeIntervalSinceNow_(LOOKAHEAD_DAYS * 86400)
+            items = self._events(now, far) + self._reminders(now, far)
+            lookahead = bool(items)
+
         items.sort(key=lambda i: i["start"])
 
         self.handles = {}
         for idx, item in enumerate(items[:MAX_ITEMS]):
             item["handle"] = f"e{idx}"
             self.handles[item["handle"]] = item["obj"]
-        return items[:MAX_ITEMS], max(0, len(items) - MAX_ITEMS)
+        return items[:MAX_ITEMS], max(0, len(items) - MAX_ITEMS), lookahead
 
     # -- writing back ----------------------------------------------------
 
@@ -363,7 +381,8 @@ def truncate(title: str) -> str:
     return out.rstrip() + "…"
 
 
-def build_payload(items: list[dict], more: int, quiet: bool) -> dict:
+def build_payload(items: list[dict], more: int, quiet: bool,
+                  lookahead: bool = False) -> dict:
     """Local wall-clock epochs throughout — the firmware does plain division on
     them rather than carrying a timezone database."""
     offset = -time.timezone if time.localtime().tm_isdst == 0 else -time.altzone
@@ -378,6 +397,8 @@ def build_payload(items: list[dict], more: int, quiet: bool) -> dict:
     }
     if quiet:
         payload["q"] = True
+    if lookahead:
+        payload["lk"] = True
 
     for item in items:
         entry = {
@@ -389,6 +410,12 @@ def build_payload(items: list[dict], more: int, quiet: bool) -> dict:
         }
         if item["reminder"]:
             entry["r"] = True
+        # In lookahead mode the row shows a date where the time normally goes —
+        # at a week's distance the minute is noise and the day is the point.
+        # Formatted here: month names and locale belong on the host, not in
+        # firmware.
+        if lookahead:
+            entry["ds"] = datetime.fromtimestamp(item["start"]).strftime("%-d %b")
         # Alarms already past are not re-rung on the board; the daemon simply
         # stops offering them, which is what "missed" should look like.
         if item["alarm"] and item["alarm"] > now:
@@ -471,9 +498,9 @@ async def run_session(address, agenda: Agenda, quiet_window) -> None:
             if agenda.dirty or now - last_sweep >= POLL_INTERVAL:
                 agenda.dirty = False
                 last_sweep = now
-                items, more = agenda.collect()
+                items, more, lookahead = agenda.collect()
                 quiet = in_quiet_hours(quiet_window, datetime.now())
-                for fragment in frame(build_payload(items, more, quiet)):
+                for fragment in frame(build_payload(items, more, quiet, lookahead)):
                     await client.write_gatt_char(CMP_CHAR_UUID, fragment, response=False)
                     await asyncio.sleep(0.02)   # let the 5 ms firmware loop keep up
                 log(f"sent {len(items)} item(s), {more} more{' (quiet)' if quiet else ''}")

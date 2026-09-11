@@ -709,9 +709,12 @@ static void format_clock_time(long epoch, char* buf, size_t len) {
 static void format_lead_time(long secs, char* buf, size_t len) {
     if (secs <= 0) { snprintf(buf, len, "STARTING NOW"); return; }
     long mins = (secs + 59) / 60;
-    if (mins < 60)      snprintf(buf, len, "IN %ld MIN", mins);
+    if (mins < 60)       snprintf(buf, len, "IN %ld MIN", mins);
     else if (mins < 600) snprintf(buf, len, "IN %ld H %02ld", mins / 60, mins % 60);
-    else                 snprintf(buf, len, "IN %ld H", mins / 60);
+    // Past two days, hours stop being readable as a quantity — "IN 110 H"
+    // takes arithmetic to understand, "IN 5 DAYS" does not.
+    else if (mins < 48 * 60) snprintf(buf, len, "IN %ld H", mins / 60);
+    else                 snprintf(buf, len, "IN %ld DAYS", (mins + 24 * 60 - 1) / (24 * 60));
 }
 
 static void render_agenda(void);
@@ -1272,7 +1275,12 @@ static void render_agenda_hero(void) {
     // Spell the day out when it isn't today — the hero is the one place with
     // room for the word, and it is where the reader looks first.
     const int ahead = days_ahead(it.start_epoch, now);
-    const char* day = ahead == 0 ? "" : ahead == 1 ? "Tomorrow " : "Later ";
+    // An exact date beats a vague "Later" once we are past tomorrow, and in
+    // lookahead mode the daemon has already sent one.
+    char day[12] = "";
+    if (it.date_short[0])  snprintf(day, sizeof(day), "%s ", it.date_short);
+    else if (ahead == 1)   snprintf(day, sizeof(day), "Tomorrow ");
+    else if (ahead > 1)    snprintf(day, sizeof(day), "In %dd ", ahead);
     if (it.duration_min > 0) {
         char to[12];
         format_clock_time(end, to, sizeof(to));
@@ -1322,10 +1330,21 @@ static void render_agenda(void) {
         }
         const AgendaItem& it = agenda.items[idx];
         char t[12];
-        format_clock_time(it.start_epoch, t, sizeof(t));
-        lv_label_set_text(r.time, t);
-        // The time column is too narrow for a date, so a later day is carried
-        // by colour instead: dim means today, accent means it isn't.
+        // Days out, the minute is noise and the date is the point, so the
+        // column carries whichever matters. The daemon formats the date —
+        // month names and locale belong on the host.
+        if (it.date_short[0]) {
+            lv_label_set_text(r.time, it.date_short);
+            // The mono face is for clock digits, where a fixed advance keeps
+            // the column aligned. On "17 Sep" it just opens a gap mid-string.
+            lv_obj_set_style_text_font(r.time, L.ag_foot_font, 0);
+        } else {
+            lv_obj_set_style_text_font(r.time, L.ag_time_font, 0);
+            format_clock_time(it.start_epoch, t, sizeof(t));
+            lv_label_set_text(r.time, t);
+        }
+        // Within the near window the column still shows a time, so a later day
+        // is carried by colour: dim means today, accent means it isn't.
         lv_obj_set_style_text_color(
             r.time, days_ahead(it.start_epoch, now_epoch()) ? COL_ACCENT : COL_DIM, 0);
         lv_label_set_text(r.name, it.title);
