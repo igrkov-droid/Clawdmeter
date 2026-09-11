@@ -20,6 +20,13 @@ LV_FONT_DECLARE(font_styrene_12);
 LV_FONT_DECLARE(font_mono_32);
 LV_FONT_DECLARE(font_mono_18);
 
+// Cyrillic faces. Tiempos and Styrene ship no Cyrillic glyphs whatsoever, so a
+// Russian event title renders as blank space. PT Serif and PT Sans supply the
+// missing characters; see link_cyrillic_fallbacks() below.
+LV_FONT_DECLARE(font_cyr_serif_34);
+LV_FONT_DECLARE(font_cyr_serif_56);
+LV_FONT_DECLARE(font_cyr_sans_20);
+
 // Layout values computed from the active board's geometry. Populated once
 // in ui_init() and treated as const for the rest of the program. Adding a
 // new display size means extending compute_layout() with another
@@ -82,6 +89,31 @@ struct Layout {
     const lv_font_t* bt_credit_2_font;
 };
 static Layout L = {};
+
+// ---- Cyrillic fallback ----
+//
+// Tiempos and Styrene contain no Cyrillic glyphs at all, so a Russian event
+// title draws as blank space. LVGL can chain a second font per glyph through
+// lv_font_t::fallback, but the generated fonts are `const` and live in
+// read-only memory — writing the field into them faults (SIGBUS on the sim,
+// a crash on the board). Instead each slot that shows user text gets a small
+// mutable copy of its font: the copy shares every glyph bitmap by pointer, so
+// it costs one struct, not a second typeface.
+//
+// Only slots carrying user-supplied text are wrapped. The rest of the screen
+// is firmware's own wording and is Latin by construction.
+//
+// The fallback sizes (34/56 serif, 20 sans) are matched to the 480x480 board.
+// A smaller port that picks 16px rows will render Cyrillic slightly larger
+// than its Latin neighbours until a matching size is generated.
+static lv_font_t f_title_ru, f_alarm_ru, f_row_ru, f_meta_ru;
+
+static const lv_font_t* with_fallback(lv_font_t* copy, const lv_font_t* base,
+                                      const lv_font_t* fb) {
+    *copy = *base;
+    copy->fallback = fb;
+    return copy;
+}
 
 // Pick layout values from the active board's pixel dimensions. The two
 // existing boards happen to land on the two breakpoints below; new ports
@@ -236,6 +268,12 @@ static void compute_layout(const BoardCaps& c) {
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
+
+    // Wrap the user-text slots so Cyrillic resolves through PT Serif / PT Sans.
+    L.ag_title_font = with_fallback(&f_title_ru, L.ag_title_font, &font_cyr_serif_34);
+    L.ag_alarm_font = with_fallback(&f_alarm_ru, L.ag_alarm_font, &font_cyr_serif_56);
+    L.ag_row_font   = with_fallback(&f_row_ru,   L.ag_row_font,   &font_cyr_sans_20);
+    L.ag_meta_font  = with_fallback(&f_meta_ru,  L.ag_meta_font,  &font_cyr_sans_20);
 }
 
 // Anthropic brand palette — design tokens live in theme.h

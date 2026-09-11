@@ -38,3 +38,32 @@ file must be patched for LVGL 9 compatibility:
 4. Add `.fallback = NULL`, `.user_data = NULL` to the font struct
 
 Without these patches, fonts compile but render as invisible.
+
+## Cyrillic
+
+Tiempos and Styrene have no Cyrillic glyphs, so text coming from the user —
+calendar event titles — draws as blank space. PT Serif and PT Sans fill the gap
+through LVGL's per-font fallback: Latin keeps the brand faces, only the missing
+code points come from PT.
+
+```bash
+lv_font_conv --font assets/PTSerif-Regular.ttf -r 0x400-0x45F \
+  --size 34 --format lvgl --bpp 4 --no-compress \
+  -o firmware/src/font_cyr_serif_34.c --lv-include "lvgl.h"
+# likewise --size 56 -> font_cyr_serif_56.c
+# and PTSans-Regular.ttf --size 20 -> font_cyr_sans_20.c
+```
+
+The fallback is attached in `compute_layout()` (`ui.cpp`) via `with_fallback()`,
+which copies the font struct and sets `.fallback` on the copy. Do not write the
+field into the generated fonts directly: they are `const` and live in read-only
+memory, so the store faults at runtime rather than failing to compile.
+
+## Patching for LVGL 9
+
+`tools/patch_lvgl9_font.py <file.c>` applies the four edits listed above
+automatically and is idempotent, so it can be re-run after any regeneration:
+
+```bash
+python3 tools/patch_lvgl9_font.py firmware/src/font_cyr_sans_20.c
+```
