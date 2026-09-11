@@ -21,16 +21,12 @@ if ! python3 -c "import serial" 2>/dev/null; then
     fi
 fi
 
-TMPRAW=$(mktemp /tmp/screenshot_XXXXXX.raw)
-TMPDIMS=$(mktemp /tmp/screenshot_XXXXXX.dims)
-trap "rm -f '$TMPRAW' '$TMPDIMS'" EXIT
-
 echo "Taking screenshot from $PORT..."
 
-"$PY" - "$PORT" "$TMPRAW" "$TMPDIMS" << 'PYEOF'
-import serial, sys
+"$PY" - "$PORT" "$OUTPUT" << 'PYEOF'
+import serial, sys, struct, zlib
 
-port_path, raw_path, dims_path = sys.argv[1], sys.argv[2], sys.argv[3]
+port_path, out_path = sys.argv[1], sys.argv[2]
 
 port = serial.Serial(port_path, 115200, timeout=10)
 port.reset_input_buffer()
@@ -46,6 +42,9 @@ while True:
     if line == "SCREENSHOT_ERR":
         print("Device reported screenshot error", file=sys.stderr)
         sys.exit(1)
+    if line == "SCREENSHOT_UNSUPPORTED":
+        print("Board has no PSRAM; snapshot capture is unavailable", file=sys.stderr)
+        sys.exit(1)
 
 data = b""
 while len(data) < raw_size:
@@ -55,17 +54,35 @@ while len(data) < raw_size:
         sys.exit(1)
     data += chunk
 
-with open(raw_path, "wb") as f:
-    f.write(data)
-with open(dims_path, "w") as f:
-    f.write(f"{w}x{h}\n")
-
 for _ in range(10):
     line = port.readline().decode("utf-8", errors="replace").strip()
     if line == "SCREENSHOT_END":
         break
 
 port.close()
+
+# RGB565LE -> PNG with the standard library, so the script needs no ffmpeg or
+# Pillow (neither ships on a stock macOS).
+rows = bytearray()
+for y in range(h):
+    rows.append(0)                                  # PNG per-scanline filter: none
+    row = data[y * w * 2:(y + 1) * w * 2]
+    for px in struct.unpack(f"<{w}H", row):
+        r = (px >> 11) & 0x1F
+        g = (px >> 5) & 0x3F
+        b = px & 0x1F
+        rows += bytes(((r * 255 + 15) // 31, (g * 255 + 31) // 63, (b * 255 + 15) // 31))
+
+def chunk(tag, payload):
+    return (struct.pack(">I", len(payload)) + tag + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+with open(out_path, "wb") as f:
+    f.write(b"\x89PNG\r\n\x1a\n")
+    f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+    f.write(chunk(b"IDAT", zlib.compress(bytes(rows), 6)))
+    f.write(chunk(b"IEND", b""))
+
 print(f"Captured {w}x{h} ({len(data)} bytes)")
 PYEOF
 
@@ -74,14 +91,4 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-DIMS=$(cat "$TMPDIMS")
-ffmpeg -y -f rawvideo -pixel_format rgb565le -video_size "$DIMS" \
-    -i "$TMPRAW" -update 1 -frames:v 1 "$OUTPUT" 2>/dev/null || true
-
-
-if [ -f "$OUTPUT" ]; then
-    echo "Saved: $OUTPUT ($DIMS)"
-else
-    echo "Error: conversion failed"
-    exit 1
-fi
+echo "Saved: $OUTPUT"
