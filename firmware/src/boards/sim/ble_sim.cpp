@@ -9,14 +9,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_STATES 64
-#define MAX_LINE   512
+// Agenda payloads carry a whole day of events and run past 500 bytes, so the
+// line budget is larger than the usage scenario ever needed.
+#define MAX_LINE   1024
 
 struct SimState {
     char json[MAX_LINE];
     char name[32];
     uint32_t hold_ms;
+    bool is_agenda;   // routed to the companion channel instead of usage
 };
 
 static SimState states[MAX_STATES];
@@ -44,6 +48,7 @@ static void add_state(const char* line) {
     memcpy(s->json, line, len);
     s->json[len] = 0;
     s->hold_ms = 3000;
+    s->is_agenda = false;
     snprintf(s->name, sizeof(s->name), "state %d", n_states + 1);
     // "name" and "hold_ms" ride along in the payload; main's parse_json
     // ignores unknown keys so the line is delivered as-is.
@@ -52,6 +57,9 @@ static void add_state(const char* line) {
         s->hold_ms = doc["hold_ms"] | 3000;
         const char* nm = doc["name"] | (const char*)NULL;
         if (nm) snprintf(s->name, sizeof(s->name), "%s", nm);
+        // The daemon tags agenda documents with "k":"agenda"; on hardware they
+        // arrive on their own characteristic, here the tag picks the channel.
+        s->is_agenda = strcmp(doc["k"] | "", "agenda") == 0;
     }
     n_states++;
 }
@@ -109,11 +117,51 @@ const char* ble_get_mac_address(void) { return "00:51:4D:00:00:01"; }
 void ble_clear_bonds(void) { printf("[sim] pair gesture completed — bonds cleared\n"); }
 bool ble_has_bonds(void)   { return true; }
 
-bool ble_has_data(void) { return connected && pending; }
+bool ble_has_data(void) {
+    return connected && pending && !states[cur].is_agenda;
+}
 const char* ble_get_data(void) {
     pending = false;
     delivered_ms = millis();
     return states[cur].json;
+}
+
+// ---- Companion channel (agenda in, user actions out) ----
+static char cmp_buf[MAX_LINE];
+
+bool ble_has_companion(void) {
+    return connected && pending && states[cur].is_agenda;
+}
+
+// Rebase the payload's timestamps on the host clock before handing it over.
+// Scenario files hold absolute epochs, so without this a file written today
+// shows yesterday's meetings tomorrow and its reminder never rings. The
+// document's own "t" is read as "this was sent now", and every item time
+// shifts by the same delta — so a scenario stays usable indefinitely and the
+// alarm always fires the same number of seconds after launch.
+const char* ble_get_companion(void) {
+    pending = false;
+    delivered_ms = millis();
+
+    JsonDocument doc;
+    if (deserializeJson(doc, states[cur].json) != DeserializationError::Ok)
+        return states[cur].json;   // let main's parser report the fault
+
+    const long base = doc["t"] | 0L;
+    const long delta = base ? (long)time(NULL) - base : 0;
+    if (delta) {
+        doc["t"] = base + delta;
+        for (JsonObject e : doc["e"].as<JsonArray>()) {
+            if (e["s"].is<long>())                       e["s"] = e["s"].as<long>() + delta;
+            if (e["a"].is<long>() && e["a"].as<long>())  e["a"] = e["a"].as<long>() + delta;
+        }
+    }
+    serializeJson(doc, cmp_buf, sizeof(cmp_buf));
+    return cmp_buf;
+}
+
+void ble_companion_notify(const char* json) {
+    printf("[sim] companion action: %s\n", json);
 }
 void ble_send_ack(void)  {}
 void ble_send_nack(void) { printf("[sim] payload NACKed — check the scenario JSON\n"); }
