@@ -58,10 +58,37 @@ static void rounder_cb(lv_event_t* e) {
 //   false → touch never counts as activity and is fully swallowed while the
 //           panel is dark, so pets/sleeves can't wake it overnight and LVGL
 //           can't quietly toggle splash<->usage on a black panel.
+// The panel image is rotated in software (display_hal_draw_bitmap on rotating
+// boards); the touch controller knows nothing about it and always reports raw
+// panel coordinates. Apply the inverse rotation here, or presses land where
+// the unrotated layout used to be.
+//
+// This stayed hidden because every screen until the alarm reacted to a tap
+// anywhere — the handler covers the full-screen container, so a press in the
+// wrong place still toggled the view. The alarm screen was the first with
+// small targets, and there the mismatch reads as "the buttons do nothing".
+//
+// Mapping mirrors rotate_strip(): 90° sends (x,y) to (S-1-y, x), so a panel
+// point (px,py) came from (py, S-1-px). Square panels only, which is what
+// every rotating board here is.
+static void rotate_touch(uint16_t* x, uint16_t* y) {
+    const BoardCaps& c = board_caps();
+    if (!c.has_rotation || c.width != c.height) return;
+    const uint16_t S = (uint16_t)(c.width - 1);
+    const uint16_t px = *x, py = *y;
+    switch (imu_hal_rotation_quadrant()) {
+    case 1: *x = py;     *y = (uint16_t)(S - px); break;
+    case 2: *x = (uint16_t)(S - px); *y = (uint16_t)(S - py); break;
+    case 3: *x = (uint16_t)(S - py); *y = px;     break;
+    default: break;   // 0° — panel and layout agree
+    }
+}
+
 static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     uint16_t x, y;
     bool pressed;
     touch_hal_read(&x, &y, &pressed);
+    rotate_touch(&x, &y);
     const bool raw_pressed = pressed;
 
     if (IDLE_WAKE_ON_TOUCH) {
