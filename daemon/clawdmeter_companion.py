@@ -28,6 +28,13 @@ from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
+# Lives next door in daemon/; both talk to the same board. Guarded so the
+# companion still starts (and degrades to scanning) if that file is absent.
+try:
+    from claude_usage_daemon import discover_target as _discover_held
+except ImportError:                     # pragma: no cover - defensive
+    _discover_held = None
+
 import objc
 from Foundation import (
     NSCalendarUnitDay,
@@ -386,7 +393,28 @@ def frame(payload: dict) -> list[bytes]:
 
 # ---------------------------------------------------------------- BLE
 
-async def resolve_address() -> str:
+async def resolve_target():
+    """Return something bleak can connect to: a BLEDevice, or an address.
+
+    Scanning by name does not work here. The firmware advertises as an HID
+    keyboard, so once the board is paired macOS connects and holds it — and a
+    held peripheral is invisible to scans. Worse, a cached address does not
+    help either: on macOS bleak resolves a bare address by scanning for it, so
+    it fails the same way.
+
+    The usage daemon already solved this: it asks CoreBluetooth for the
+    peripheral the system is holding and wraps it in a BLEDevice. Reuse that
+    rather than keeping a second, subtly different copy of the logic — both
+    daemons talk to the same board over the same link.
+    """
+    if sys.platform == "darwin" and _discover_held is not None:
+        target = await _discover_held()
+        if target is not None:
+            return target
+        raise RuntimeError(f"{DEVICE_NAME} is not connected — pair it in "
+                           "System Settings > Bluetooth, then retry")
+
+    # Linux and friends: bleak connects by address without scanning first.
     if SAVED_ADDR_FILE.exists():
         cached = SAVED_ADDR_FILE.read_text().strip()
         if cached:
@@ -398,7 +426,7 @@ async def resolve_address() -> str:
     return device.address
 
 
-async def run_session(address: str, agenda: Agenda, quiet_window) -> None:
+async def run_session(address, agenda: Agenda, quiet_window) -> None:
     async with BleakClient(address, timeout=CONNECT_TIMEOUT) as client:
         log(f"connected to {address}")
 
@@ -446,8 +474,8 @@ async def main() -> None:
     while True:
         quiet_window = parse_quiet_hours(read_config().get("agenda_quiet"))
         try:
-            address = await resolve_address()
-            await run_session(address, agenda, quiet_window)
+            target = await resolve_target()
+            await run_session(target, agenda, quiet_window)
             log("link dropped; reconnecting")
         except Exception as e:                  # noqa: BLE001 — a daemon never dies on one bad cycle
             log(f"session ended: {e}")
