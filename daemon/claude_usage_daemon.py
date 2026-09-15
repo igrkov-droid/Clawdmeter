@@ -178,6 +178,21 @@ def read_config_dirs() -> list[Path]:
     return dirs or [DEFAULT_CONFIG_DIR]
 
 
+_token_source_logged = None
+
+
+def _note_token_source(where: str) -> None:
+    """Log where the token came from, once per change.
+
+    Without this the only symptom of "the file was ignored" is the display
+    going blank hours later, with nothing connecting the two.
+    """
+    global _token_source_logged
+    if _token_source_logged != where:
+        _token_source_logged = where
+        log(f"token source: {where}")
+
+
 def read_token_file() -> str | None:
     """Read the daemon's own long-lived token, if one was placed there.
 
@@ -213,6 +228,7 @@ def read_token_for(config_dir: Path) -> str | None:
     """
     own = read_token_file()
     if own:
+        _note_token_source("own token file")
         return own
 
     cred = config_dir / ".credentials.json"
@@ -222,7 +238,10 @@ def read_token_for(config_dir: Path) -> str | None:
     except OSError as e:
         log(f"Error reading credentials in {config_dir}: {e}")
     if sys.platform == "darwin" and config_dir == DEFAULT_CONFIG_DIR:
-        return _read_token_keychain()
+        tok = _read_token_keychain()
+        if tok:
+            _note_token_source("Keychain (expires in hours — see config.example)")
+        return tok
     return None
 
 
