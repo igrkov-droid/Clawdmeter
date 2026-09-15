@@ -248,13 +248,19 @@ class Agenda:
             self.pump()
 
         out = []
+        skipped_no_due = 0
         cal = NSCalendar.currentCalendar()
         for rem in box["items"] or []:
             comps = rem.dueDateComponents()
             if comps is None:
+                # A reminder with no due date has no moment to count down to.
+                # Logged because this is the likeliest reason one a user just
+                # created never reaches the board.
+                skipped_no_due += 1
                 continue
             due = cal.dateFromComponents_(comps)
             if due is None:
+                skipped_no_due += 1
                 continue
             when = due.timeIntervalSince1970()
             out.append({
@@ -268,6 +274,9 @@ class Agenda:
                 "reminder": True,
                 "color": calendar_color_index(rem.calendar()),
             })
+        if skipped_no_due:
+            log(f"{skipped_no_due} reminder(s) in range have no due date — skipped")
+
         return out
 
     @staticmethod
@@ -509,7 +518,14 @@ async def run_session(address, agenda: Agenda, quiet_window) -> None:
                 for fragment in frame(build_payload(items, more, quiet, lookahead)):
                     await client.write_gatt_char(CMP_CHAR_UUID, fragment, response=False)
                     await asyncio.sleep(0.02)   # let the 5 ms firmware loop keep up
-                log(f"sent {len(items)} item(s), {more} more{' (quiet)' if quiet else ''}")
+                # Split the count by source: calendars and reminders are two
+                # separate macOS permissions, and when only one is granted the
+                # screen looks half-empty with nothing explaining why.
+                n_rem = sum(1 for i in items if i.get("reminder"))
+                log(f"sent {len(items)} item(s) "
+                    f"({len(items) - n_rem} event(s), {n_rem} reminder(s)), "
+                    f"{more} more{' (quiet)' if quiet else ''}"
+                    f"{' [lookahead]' if lookahead else ''}")
             await asyncio.sleep(TICK)
 
 
