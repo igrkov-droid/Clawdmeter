@@ -76,6 +76,7 @@ struct Layout {
     int16_t ag_hero_y, ag_hero_h;
     int16_t ag_row_y, ag_row_h;
     int16_t ag_time_w;               // time/date column before the coloured dot
+    const lv_font_t* ag_hint_font;   // empty-state subtitle: a step below body
     int16_t ag_foot_y;
     uint8_t ag_rows;                 // list rows below the hero card that fit
     const lv_font_t* ag_kicker_font; // "IN 12 MIN" over the hero card
@@ -185,6 +186,7 @@ static void compute_layout(const BoardCaps& c) {
         // Wide enough for "25 Sep" at this size. It used to be a sixth of the
         // content width, which fit a clock but not a date in the larger face.
         L.ag_time_w      = 104;
+        L.ag_hint_font   = &font_styrene_20;
         // Matched to the 26px row text; the 18px mono looked stunted beside it.
         L.ag_time_font   = &font_mono_24;
         L.ag_foot_font   = &font_styrene_14;
@@ -216,6 +218,7 @@ static void compute_layout(const BoardCaps& c) {
         L.ag_meta_font   = &font_styrene_16;
         L.ag_row_font    = &font_styrene_16;
         L.ag_time_w      = 76;
+        L.ag_hint_font   = &font_styrene_14;
         L.ag_time_font   = &font_mono_18;
         L.ag_foot_font   = &font_styrene_12;
         L.ag_alarm_font  = &font_tiempos_34;
@@ -870,8 +873,14 @@ static void init_agenda_screen(lv_obj_t* scr) {
 
     ag_empty_sub = lv_label_create(ag_empty_group);
     lv_label_set_text(ag_empty_sub, "");
-    lv_obj_set_style_text_font(ag_empty_sub, L.ag_meta_font, 0);
+    // A step below the body size, and allowed to wrap. It inherited the row
+    // font once, and when that grew to 28px "Waiting for the companion daemon"
+    // stopped fitting across the panel and was clipped at both ends.
+    lv_obj_set_style_text_font(ag_empty_sub, L.ag_hint_font, 0);
     lv_obj_set_style_text_color(ag_empty_sub, COL_DIM, 0);
+    lv_obj_set_width(ag_empty_sub, L.content_w);
+    lv_label_set_long_mode(ag_empty_sub, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(ag_empty_sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(ag_empty_sub, LV_ALIGN_CENTER, 0, 26);
 
     render_agenda();   // start in the empty state rather than a bare skeleton
