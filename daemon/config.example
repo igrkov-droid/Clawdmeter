@@ -37,3 +37,21 @@ clock = off
 #   Unset (default) = the board rings whenever an alarm comes due.
 #   HH:MM-HH:MM     = silent window; crossing midnight is fine.
 # agenda_quiet = 22:00-08:00
+
+# --- Long-lived token (optional) -------------------------------------------
+#
+# By default the daemon reads the OAuth token the Claude Code CLI keeps in the
+# macOS Keychain. That token lasts hours and is only refreshed when you use the
+# CLI, so a daemon left alone goes blind until someone runs `claude auth login`
+# again.
+#
+# To give the daemon a credential of its own:
+#
+#     claude setup-token          # mints a long-lived token (needs a subscription)
+#
+# then store it, readable only by you, in:
+#
+#     ~/.config/claude-usage-monitor/token
+#
+# The file wins over the Keychain when present. Keep it at mode 600 — the
+# daemon warns on every poll if it is readable by anyone else.

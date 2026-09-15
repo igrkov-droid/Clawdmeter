@@ -40,6 +40,13 @@ DEFAULT_CONFIG_DIR = Path.home() / ".claude"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 CONFIG_FILE = Path.home() / ".config" / "claude-usage-monitor" / "config"
 
+# A token of our own, independent of the Claude Code CLI session. The OAuth
+# token in Keychain lasts hours and is refreshed only when you actually use the
+# CLI, so a daemon relying on it goes blind overnight and stays blind until
+# someone remembers to log in again. `claude setup-token` mints a long-lived
+# one; put it here and this file wins over Keychain.
+TOKEN_FILE = Path.home() / ".config" / "claude-usage-monitor" / "token"
+
 API_URL = "https://api.anthropic.com/v1/messages"
 API_HEADERS_TEMPLATE = {
     "anthropic-version": "2023-06-01",
@@ -171,6 +178,29 @@ def read_config_dirs() -> list[Path]:
     return dirs or [DEFAULT_CONFIG_DIR]
 
 
+def read_token_file() -> str | None:
+    """Read the daemon's own long-lived token, if one was placed there.
+
+    Checked before anything else: when it exists the operator has deliberately
+    given the daemon its own credential and does not want it falling back to
+    whatever state the CLI session happens to be in.
+    """
+    try:
+        if not TOKEN_FILE.exists():
+            return None
+        token = TOKEN_FILE.read_text().strip()
+        if not token:
+            return None
+        # World- or group-readable secrets are worth one line of nagging.
+        mode = TOKEN_FILE.stat().st_mode & 0o077
+        if mode:
+            log(f"warning: {TOKEN_FILE} is readable by others — chmod 600 it")
+        return token
+    except OSError as e:
+        log(f"Error reading {TOKEN_FILE}: {e}")
+        return None
+
+
 def read_token_for(config_dir: Path) -> str | None:
     """Read the OAuth token for one config dir.
 
@@ -181,6 +211,10 @@ def read_token_for(config_dir: Path) -> str | None:
     a work plan whose token lives only in the single Keychain entry can't be told
     apart there (documented follow-up).
     """
+    own = read_token_file()
+    if own:
+        return own
+
     cred = config_dir / ".credentials.json"
     try:
         if cred.exists():
